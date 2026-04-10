@@ -53,7 +53,7 @@ export function aggregate(
     const wf = workflowMap.get(run.workflow) ?? { minutes: 0, runs: 0 };
     wf.minutes += duration;
     wf.runs += 1;
-    workflowMap.set(wfName, wf);
+    workflowMap.set(run.workflow, wf);
   }
 
   const users = [...userMap.values()].sort((a, b) => {
