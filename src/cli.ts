@@ -2,9 +2,16 @@ import { Command, Option } from "commander";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { detectRepo, checkGhCli, fetchAllRuns } from "./github.js";
+import {
+  checkGhCli,
+  fetchRepoRuns,
+  fetchMultiRepoRuns,
+  formatFetchSummary,
+} from "./github.js";
+import type { FetchResult } from "./github.js";
+import { resolveRepos, formatResolveLog } from "./resolve.js";
 import { aggregate } from "./aggregate.js";
-import { renderTable, renderCsv, renderJson } from "./output.js";
+import { renderTable, renderCsv, renderJson, formatRepoDisplay } from "./output.js";
 import type { CliOptions } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,13 +26,34 @@ const startOfMonthStr = (): string => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 };
 
+async function fetchRuns(
+  repos: string[],
+  since: string,
+  until: string,
+): Promise<FetchResult[]> {
+  process.stderr.write(
+    `Fetching GitHub Actions runs for ${formatRepoDisplay(repos)} (${since} to ${until})...\n`,
+  );
+
+  const results =
+    repos.length === 1
+      ? [await fetchRepoRuns(repos[0], since, until)]
+      : await fetchMultiRepoRuns(repos, since, until);
+
+  const summary = formatFetchSummary(results);
+  if (summary) process.stderr.write(summary + "\n");
+
+  return results;
+}
+
 const program = new Command()
   .name("actions-usage")
   .description("Show GitHub Actions usage metrics per developer")
   .version(pkg.version)
+  .option("--org <org-name>", "scan all repositories in a GitHub organization")
   .option(
-    "--repo <owner/repo>",
-    "target repository (default: detect from git remote)",
+    "--repo <repos...>",
+    "target repositories (default: detect from git remote)",
   )
   .option(
     "--since <date>",
@@ -46,7 +74,8 @@ const program = new Command()
   .action(async (opts) => {
     try {
       const options: CliOptions = {
-        repo: opts.repo ?? "",
+        repos: opts.repo ?? [],
+        org: opts.org,
         since: opts.since ?? startOfMonthStr(),
         until: opts.until ?? todayStr(),
         format: opts.format ?? "table",
@@ -56,31 +85,24 @@ const program = new Command()
 
       await checkGhCli();
 
-      if (!options.repo) {
-        process.stderr.write("Detecting repo from git remote...\n");
-        options.repo = await detectRepo();
-      }
+      const resolved = await resolveRepos(options.org, options.repos);
+      const resolveLog = formatResolveLog(resolved, options.org);
+      if (resolveLog) process.stderr.write(resolveLog + "\n");
+      options.repos = resolved.repos;
 
-      process.stderr.write(
-        `Fetching GitHub Actions runs for ${options.repo} (${options.since} to ${options.until})...\n`,
-      );
-
-      const runs = await fetchAllRuns(
-        options.repo,
-        options.since,
-        options.until,
-      );
+      const results = await fetchRuns(options.repos, options.since, options.until);
+      const runs = results.flatMap((r) => r.runs);
 
       if (runs.length === 0) {
         process.stderr.write("No completed runs found in this period.\n");
         process.exit(0);
       }
 
-      process.stderr.write(`Total: ${runs.length} completed runs\n\n`);
+      process.stderr.write(`\nTotal: ${runs.length} completed runs\n\n`);
 
       const data = aggregate(
         runs,
-        options.repo,
+        options.repos,
         options.since,
         options.until,
         options.sort,

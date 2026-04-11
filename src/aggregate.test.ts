@@ -56,8 +56,10 @@ describe("aggregate", () => {
     workflow: string,
     startedAt: string,
     minutes: number,
+    repo = "org/repo",
   ): WorkflowRun => ({
     id: nextId++,
+    repo,
     actor,
     workflow,
     startedAt,
@@ -73,35 +75,36 @@ describe("aggregate", () => {
     makeRun("dependabot[bot]", "npm_and_yarn", "2025-01-20T08:00:00Z", 10),
   ];
 
-  it("groups runs by actor", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+  it("groups runs by actor and repo", () => {
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     const actors = data.users.map((u) => u.actor);
     expect(actors).toContain("alice");
     expect(actors).toContain("bob");
     expect(actors).toContain("dependabot[bot]");
+    expect(data.users.every((u) => u.repo === "org/repo")).toBe(true);
   });
 
   it("calculates per-user totals", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     const alice = data.users.find((u) => u.actor === "alice")!;
     expect(alice.totalMinutes).toBe(90);
     expect(alice.totalRuns).toBe(2);
   });
 
   it("tracks monthly breakdown with YYYY-MM keys", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     const alice = data.users.find((u) => u.actor === "alice")!;
     expect(alice.monthlyMinutes["2025-01"]).toBe(60);
     expect(alice.monthlyMinutes["2025-02"]).toBe(30);
   });
 
   it("sorts months chronologically", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     expect(data.months).toEqual(["2025-01", "2025-02"]);
   });
 
   it("preserves individual workflow names in summary", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     const wfNames = data.workflows.map((w) => w.name);
     expect(wfNames).toContain("npm_and_yarn");
     expect(wfNames).toContain("CI");
@@ -109,18 +112,18 @@ describe("aggregate", () => {
   });
 
   it("sorts by minutes descending by default", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     expect(data.users[0].actor).toBe("alice");
   });
 
   it("sorts by name alphabetically", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "name");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "name");
     const actors = data.users.map((u) => u.actor);
     expect(actors).toEqual([...actors].sort());
   });
 
   it("sorts by runs descending", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "runs");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "runs");
     for (let i = 1; i < data.users.length; i++) {
       expect(data.users[i - 1].totalRuns).toBeGreaterThanOrEqual(
         data.users[i].totalRuns,
@@ -134,7 +137,7 @@ describe("aggregate", () => {
       makeRun("alice", "CI", "2026-01-10T10:00:00Z", 120),
     ];
     const data = aggregate(
-      crossYearRuns, "org/repo", "2025-01-01", "2026-01-31", "minutes",
+      crossYearRuns, ["org/repo"], "2025-01-01", "2026-01-31", "minutes",
     );
     const alice = data.users.find((u) => u.actor === "alice")!;
     expect(alice.monthlyMinutes["2025-01"]).toBe(60);
@@ -143,10 +146,30 @@ describe("aggregate", () => {
   });
 
   it("computes correct totals", () => {
-    const data = aggregate(runs, "org/repo", "2025-01-01", "2025-02-28", "minutes");
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
     expect(data.totals.runs).toBe(4);
     expect(data.totals.minutes).toBe(60 + 30 + 45 + 10);
     expect(data.totals.monthly["2025-01"]).toBe(60 + 45 + 10);
     expect(data.totals.monthly["2025-02"]).toBe(30);
+  });
+
+  it("creates separate entries for same actor across repos", () => {
+    const multiRepoRuns: WorkflowRun[] = [
+      makeRun("alice", "CI", "2025-01-10T10:00:00Z", 60, "org/api"),
+      makeRun("alice", "CI", "2025-01-10T10:00:00Z", 30, "org/web"),
+    ];
+    const data = aggregate(
+      multiRepoRuns, ["org/api", "org/web"], "2025-01-01", "2025-01-31", "minutes",
+    );
+    const aliceEntries = data.users.filter((u) => u.actor === "alice");
+    expect(aliceEntries).toHaveLength(2);
+    expect(aliceEntries.map((u) => u.repo).sort()).toEqual(["org/api", "org/web"]);
+    expect(aliceEntries.find((u) => u.repo === "org/api")!.totalMinutes).toBe(60);
+    expect(aliceEntries.find((u) => u.repo === "org/web")!.totalMinutes).toBe(30);
+  });
+
+  it("stores repos array in output", () => {
+    const data = aggregate(runs, ["org/repo"], "2025-01-01", "2025-02-28", "minutes");
+    expect(data.repos).toEqual(["org/repo"]);
   });
 });

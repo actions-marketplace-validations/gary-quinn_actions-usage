@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { formatMonthLabel, escapeCsvField, renderCsv, renderJson } from "./output.js";
+import {
+  formatMonthLabel,
+  escapeCsvField,
+  shortRepoName,
+  formatRepoDisplay,
+  renderTable,
+  renderCsv,
+  renderJson,
+} from "./output.js";
 import type { AggregatedData } from "./types.js";
 
 describe("formatMonthLabel", () => {
@@ -47,15 +55,77 @@ describe("escapeCsvField", () => {
   });
 });
 
-function makeSampleData(): AggregatedData {
+describe("shortRepoName", () => {
+  it("strips org prefix when all repos share the same owner", () => {
+    const fn = shortRepoName(["org/api", "org/web", "org/docs"]);
+    expect(fn("org/api")).toBe("api");
+    expect(fn("org/web")).toBe("web");
+  });
+
+  it("keeps full name when repos have different owners", () => {
+    const fn = shortRepoName(["org1/api", "org2/web"]);
+    expect(fn("org1/api")).toBe("org1/api");
+    expect(fn("org2/web")).toBe("org2/web");
+  });
+});
+
+describe("formatRepoDisplay", () => {
+  it("joins up to 3 repos with commas", () => {
+    expect(formatRepoDisplay(["org/a"])).toBe("org/a");
+    expect(formatRepoDisplay(["org/a", "org/b"])).toBe("org/a, org/b");
+    expect(formatRepoDisplay(["a/1", "a/2", "a/3"])).toBe("a/1, a/2, a/3");
+  });
+
+  it("shows count for more than 3 repos", () => {
+    expect(formatRepoDisplay(["a/1", "a/2", "a/3", "a/4"])).toBe(
+      "4 repositories",
+    );
+  });
+});
+
+function makeSampleData(multiRepo = false): AggregatedData {
+  if (multiRepo) {
+    return {
+      repos: ["org/api", "org/web"],
+      since: "2025-01-01",
+      until: "2025-01-31",
+      months: ["2025-01"],
+      users: [
+        {
+          actor: "alice",
+          repo: "org/api",
+          totalMinutes: 60,
+          totalRuns: 1,
+          monthlyMinutes: { "2025-01": 60 },
+          workflows: { CI: { minutes: 60, runs: 1 } },
+        },
+        {
+          actor: "alice",
+          repo: "org/web",
+          totalMinutes: 30,
+          totalRuns: 1,
+          monthlyMinutes: { "2025-01": 30 },
+          workflows: { CI: { minutes: 30, runs: 1 } },
+        },
+      ],
+      totals: {
+        minutes: 90,
+        runs: 2,
+        monthly: { "2025-01": 90 },
+      },
+      workflows: [{ name: "CI", minutes: 90, runs: 2 }],
+    };
+  }
+
   return {
-    repo: "org/repo",
+    repos: ["org/repo"],
     since: "2025-01-01",
     until: "2025-02-28",
     months: ["2025-01", "2025-02"],
     users: [
       {
         actor: "alice",
+        repo: "org/repo",
         totalMinutes: 90,
         totalRuns: 2,
         monthlyMinutes: { "2025-01": 60, "2025-02": 30 },
@@ -63,6 +133,7 @@ function makeSampleData(): AggregatedData {
       },
       {
         actor: "bob",
+        repo: "org/repo",
         totalMinutes: 45,
         totalRuns: 1,
         monthlyMinutes: { "2025-01": 45 },
@@ -81,14 +152,42 @@ function makeSampleData(): AggregatedData {
   };
 }
 
+describe("renderTable", () => {
+  it("renders without Repo column for single repo", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    renderTable(makeSampleData());
+    const output = logSpy.mock.calls.map(([c]) => String(c)).join("\n");
+    logSpy.mockRestore();
+
+    expect(output).toContain("Developer");
+    expect(output).toContain("alice");
+    expect(output).toContain("bob");
+    expect(output).toContain("TOTAL");
+    expect(output).not.toContain("│ Repo");
+  });
+
+  it("renders with Repo column for multi-repo", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    renderTable(makeSampleData(true));
+    const output = logSpy.mock.calls.map(([c]) => String(c)).join("\n");
+    logSpy.mockRestore();
+
+    expect(output).toContain("Repo");
+    expect(output).toContain("api");
+    expect(output).toContain("web");
+  });
+});
+
 describe("renderCsv", () => {
-  it("outputs correct CSV to stdout", () => {
+  it("outputs correct CSV to stdout (single repo, no repo column)", () => {
     const data = makeSampleData();
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
 
     renderCsv(data);
 
-    const output = writeSpy.mock.calls.map(([chunk]) => chunk).join("");
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
     writeSpy.mockRestore();
 
     const lines = output.trim().split("\n");
@@ -98,14 +197,34 @@ describe("renderCsv", () => {
     expect(lines[3]).toBe("TOTAL,135,2.3,3,105,30");
   });
 
-  it("escapes actor names with commas", () => {
-    const data = makeSampleData();
-    data.users[0].actor = "alice, the dev";
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  it("includes repo column for multi-repo", () => {
+    const data = makeSampleData(true);
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
 
     renderCsv(data);
 
-    const output = writeSpy.mock.calls.map(([chunk]) => chunk).join("");
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
+
+    const lines = output.trim().split("\n");
+    expect(lines[0]).toBe("developer,repo,total_minutes,hours,runs,2025-01");
+    expect(lines[1]).toBe("alice,org/api,60,1.0,1,60");
+    expect(lines[2]).toBe("alice,org/web,30,0.5,1,30");
+    expect(lines[3]).toBe("TOTAL,,90,1.5,2,90");
+  });
+
+  it("escapes actor names with commas", () => {
+    const data = makeSampleData();
+    data.users[0].actor = "alice, the dev";
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+
+    renderCsv(data);
+
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
     writeSpy.mockRestore();
 
     expect(output).toContain('"alice, the dev"');
@@ -119,14 +238,15 @@ describe("renderJson", () => {
 
     renderJson(data);
 
-    const output = logSpy.mock.calls.map(([chunk]) => chunk).join("");
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
     logSpy.mockRestore();
 
     const parsed = JSON.parse(output);
-    expect(parsed.repo).toBe("org/repo");
+    expect(parsed.repos).toEqual(["org/repo"]);
     expect(parsed.period).toEqual({ since: "2025-01-01", until: "2025-02-28" });
     expect(parsed.users).toHaveLength(2);
     expect(parsed.users[0].developer).toBe("alice");
+    expect(parsed.users[0].repo).toBe("org/repo");
     expect(parsed.users[0].totalMinutes).toBe(90);
     expect(parsed.users[0].monthly).toEqual({ "2025-01": 60, "2025-02": 30 });
     expect(parsed.totals.minutes).toBe(135);
@@ -139,10 +259,25 @@ describe("renderJson", () => {
 
     renderJson(data);
 
-    const output = logSpy.mock.calls.map(([chunk]) => chunk).join("");
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
     logSpy.mockRestore();
 
     const parsed = JSON.parse(output);
     expect(Object.keys(parsed.users[0].monthly)).toEqual(["2025-01", "2025-02"]);
+  });
+
+  it("includes repo per user in multi-repo JSON", () => {
+    const data = makeSampleData(true);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    renderJson(data);
+
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(output);
+    expect(parsed.repos).toEqual(["org/api", "org/web"]);
+    expect(parsed.users[0].repo).toBe("org/api");
+    expect(parsed.users[1].repo).toBe("org/web");
   });
 });
