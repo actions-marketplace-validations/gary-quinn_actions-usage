@@ -39,10 +39,13 @@ export function formatFetchSummary(
 ): string {
   const active = results.filter((r) => r.runs.length > 0);
   const skippedCount = results.length - active.length;
+  const failedCount = results.filter((r) => r.warnings.length > 0).length;
 
-  if (active.length === 0) return "";
+  if (active.length === 0 && failedCount === 0) return "";
 
-  const maxLen = Math.max(...active.map((r) => r.repo.length));
+  const maxLen = active.length > 0
+    ? Math.max(...active.map((r) => r.repo.length))
+    : 0;
   const lines = active.map(
     (r) =>
       `  ${r.repo.padEnd(maxLen)}  ${String(r.runs.length).padStart(5)} runs`,
@@ -51,6 +54,11 @@ export function formatFetchSummary(
   if (skippedCount > 0) {
     const noun = skippedCount === 1 ? "repo" : "repos";
     lines.push(`  (${skippedCount} ${noun} with no runs)`);
+  }
+
+  if (failedCount > 0) {
+    const noun = failedCount === 1 ? "repo" : "repos";
+    lines.push(`  (${failedCount} ${noun} had fetch errors)`);
   }
 
   return lines.join("\n");

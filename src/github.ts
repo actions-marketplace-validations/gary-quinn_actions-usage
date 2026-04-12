@@ -179,6 +179,7 @@ export function getMonthPeriods(
 export interface FetchResult {
   readonly repo: string;
   readonly runs: readonly WorkflowRun[];
+  readonly warnings: readonly string[];
 }
 
 export async function fetchRepoRuns(
@@ -187,12 +188,22 @@ export async function fetchRepoRuns(
   until: string,
 ): Promise<FetchResult> {
   const periods = getMonthPeriods(since, until);
+  const allRuns: WorkflowRun[] = [];
+  const warnings: string[] = [];
 
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     periods.map((period) => fetchRunsForPeriod(repo, period.start, period.end)),
   );
 
-  return { repo, runs: results.flat() };
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      allRuns.push(...result.value);
+    } else {
+      warnings.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+    }
+  }
+
+  return { repo, runs: allRuns, warnings };
 }
 
 // Safe because Node.js is single-threaded: nextIndex++ and the while check

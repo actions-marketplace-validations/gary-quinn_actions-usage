@@ -89,7 +89,7 @@ describe("formatRepoDisplay", () => {
 });
 
 describe("formatFetchSummary", () => {
-  const makeResult = (repo: string, count: number): FetchResult => ({
+  const makeResult = (repo: string, count: number, warnings: string[] = []): FetchResult => ({
     repo,
     runs: Array.from({ length: count }, (_, i) => ({
       id: i,
@@ -99,6 +99,7 @@ describe("formatFetchSummary", () => {
       startedAt: "2025-01-01T00:00:00Z",
       updatedAt: "2025-01-01T00:01:00Z",
     })),
+    warnings,
   });
 
   it("returns empty string when all repos have zero runs", () => {
@@ -138,6 +139,15 @@ describe("formatFetchSummary", () => {
       makeResult("org/docs", 0),
     ];
     expect(formatFetchSummary(results)).toContain("(1 repo with no runs)");
+  });
+
+  it("reports repos with fetch errors", () => {
+    const results = [
+      makeResult("org/api", 10),
+      makeResult("org/broken", 0, ["Failed to fetch"]),
+    ];
+    const summary = formatFetchSummary(results);
+    expect(summary).toContain("(1 repo had fetch errors)");
   });
 });
 
