@@ -21,16 +21,35 @@ export function escapeCsvField(value: string | number): string {
   return str;
 }
 
+export function shortRepoName(repos: string[]): (repo: string) => string {
+  const owners = new Set(repos.map((r) => r.split("/")[0]));
+  return owners.size === 1
+    ? (repo) => repo.split("/")[1]
+    : (repo) => repo;
+}
+
+export function formatRepoDisplay(repos: string[]): string {
+  return repos.length <= 3
+    ? repos.join(", ")
+    : `${repos.length} repositories`;
+}
+
+const rightAligned = (content: string) =>
+  ({ content, hAlign: "right" as const });
+
 export function renderTable(data: AggregatedData): void {
-  const { months, users, totals, workflows } = data;
+  const { months, users, totals, workflows, repos } = data;
+  const multiRepo = repos.length > 1;
+  const getRepoLabel = multiRepo ? shortRepoName(repos) : () => "";
 
   console.log();
   console.log(chalk.bold("GitHub Actions Usage Per Developer"));
-  console.log(chalk.dim(`${data.repo} | ${data.since} to ${data.until}`));
+  console.log(chalk.dim(`${formatRepoDisplay(repos)} | ${data.since} to ${data.until}`));
   console.log();
 
   const head = [
     chalk.bold("Developer"),
+    ...(multiRepo ? [chalk.bold("Repo")] : []),
     chalk.bold("Total min"),
     chalk.bold("Hours"),
     chalk.bold("Runs"),
@@ -51,39 +70,25 @@ export function renderTable(data: AggregatedData): void {
   for (const user of users) {
     table.push([
       user.actor,
-      {
-        content: Math.round(user.totalMinutes).toLocaleString(),
-        hAlign: "right",
-      },
-      { content: (user.totalMinutes / 60).toFixed(1), hAlign: "right" },
-      { content: user.totalRuns.toLocaleString(), hAlign: "right" },
-      ...months.map((m) => ({
-        content: Math.round(user.monthlyMinutes[m] ?? 0).toLocaleString(),
-        hAlign: "right" as const,
-      })),
+      ...(multiRepo ? [getRepoLabel(user.repo)] : []),
+      rightAligned(Math.round(user.totalMinutes).toLocaleString()),
+      rightAligned((user.totalMinutes / 60).toFixed(1)),
+      rightAligned(user.totalRuns.toLocaleString()),
+      ...months.map((m) =>
+        rightAligned(Math.round(user.monthlyMinutes[m] ?? 0).toLocaleString()),
+      ),
     ]);
   }
 
   table.push([
     chalk.bold("TOTAL"),
-    {
-      content: chalk.bold(Math.round(totals.minutes).toLocaleString()),
-      hAlign: "right",
-    },
-    {
-      content: chalk.bold((totals.minutes / 60).toFixed(1)),
-      hAlign: "right",
-    },
-    {
-      content: chalk.bold(totals.runs.toLocaleString()),
-      hAlign: "right",
-    },
-    ...months.map((m) => ({
-      content: chalk.bold(
-        Math.round(totals.monthly[m] ?? 0).toLocaleString(),
-      ),
-      hAlign: "right" as const,
-    })),
+    ...(multiRepo ? [""] : []),
+    rightAligned(chalk.bold(Math.round(totals.minutes).toLocaleString())),
+    rightAligned(chalk.bold((totals.minutes / 60).toFixed(1))),
+    rightAligned(chalk.bold(totals.runs.toLocaleString())),
+    ...months.map((m) =>
+      rightAligned(chalk.bold(Math.round(totals.monthly[m] ?? 0).toLocaleString())),
+    ),
   ]);
 
   console.log(table.toString());
@@ -109,39 +114,58 @@ export function renderTable(data: AggregatedData): void {
 }
 
 export function renderCsv(data: AggregatedData, filePath?: string): void {
-  const { months, users, totals } = data;
+  const { months, users, totals, repos } = data;
+  const multiRepo = repos.length > 1;
+
+  const buildRow = (
+    developer: string,
+    repo: string,
+    minutes: number,
+    hours: string,
+    runs: number,
+    monthly: number[],
+  ): string =>
+    [
+      developer,
+      ...(multiRepo ? [repo] : []),
+      minutes,
+      hours,
+      runs,
+      ...monthly,
+    ]
+      .map(escapeCsvField)
+      .join(",");
 
   const headers = [
     "developer",
+    ...(multiRepo ? ["repo"] : []),
     "total_minutes",
     "hours",
     "runs",
     ...months.map((m) => m.toLowerCase()),
   ];
-  const lines: string[] = [headers.map(escapeCsvField).join(",")];
 
-  for (const user of users) {
-    const row = [
-      escapeCsvField(user.actor),
-      Math.round(user.totalMinutes),
-      (user.totalMinutes / 60).toFixed(1),
-      user.totalRuns,
-      ...months.map((m) => Math.round(user.monthlyMinutes[m] ?? 0)),
-    ];
-    lines.push(row.map(escapeCsvField).join(","));
-  }
-
-  lines.push(
-    [
-      escapeCsvField("TOTAL"),
+  const lines = [
+    headers.map(escapeCsvField).join(","),
+    ...users.map((user) =>
+      buildRow(
+        user.actor,
+        user.repo,
+        Math.round(user.totalMinutes),
+        (user.totalMinutes / 60).toFixed(1),
+        user.totalRuns,
+        months.map((m) => Math.round(user.monthlyMinutes[m] ?? 0)),
+      ),
+    ),
+    buildRow(
+      "TOTAL",
+      "",
       Math.round(totals.minutes),
       (totals.minutes / 60).toFixed(1),
       totals.runs,
-      ...months.map((m) => Math.round(totals.monthly[m] ?? 0)),
-    ]
-      .map(escapeCsvField)
-      .join(","),
-  );
+      months.map((m) => Math.round(totals.monthly[m] ?? 0)),
+    ),
+  ];
 
   const csv = lines.join("\n") + "\n";
 
@@ -155,10 +179,11 @@ export function renderCsv(data: AggregatedData, filePath?: string): void {
 
 export function renderJson(data: AggregatedData): void {
   const output = {
-    repo: data.repo,
+    repos: data.repos,
     period: { since: data.since, until: data.until },
     users: data.users.map((u) => ({
       developer: u.actor,
+      repo: u.repo,
       totalMinutes: Math.round(u.totalMinutes),
       hours: Number((u.totalMinutes / 60).toFixed(1)),
       runs: u.totalRuns,

@@ -1,5 +1,6 @@
 export interface WorkflowRun {
   id: number;
+  repo: string;
   actor: string;
   workflow: string;
   startedAt: string;
@@ -8,6 +9,7 @@ export interface WorkflowRun {
 
 export interface UserStats {
   actor: string;
+  repo: string;
   totalMinutes: number;
   totalRuns: number;
   monthlyMinutes: Record<string, number>;
@@ -15,7 +17,7 @@ export interface UserStats {
 }
 
 export interface AggregatedData {
-  repo: string;
+  repos: string[];
   since: string;
   until: string;
   months: string[];
@@ -29,7 +31,8 @@ export interface AggregatedData {
 }
 
 export interface CliOptions {
-  repo: string;
+  repos: string[];
+  org?: string;
   since: string;
   until: string;
   format: "table" | "csv" | "json";
