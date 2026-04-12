@@ -2,11 +2,12 @@ import chalk from "chalk";
 import Table from "cli-table3";
 import { writeFileSync } from "node:fs";
 import type { AggregatedData } from "./types.js";
+import type { FetchResult } from "./github.js";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+] as const;
 
 export function formatMonthLabel(key: string): string {
   const [year, month] = key.split("-");
@@ -21,17 +22,49 @@ export function escapeCsvField(value: string | number): string {
   return str;
 }
 
-export function shortRepoName(repos: string[]): (repo: string) => string {
+export function shortRepoName(
+  repos: readonly string[],
+): (repo: string) => string {
   const owners = new Set(repos.map((r) => r.split("/")[0]));
-  return owners.size === 1
-    ? (repo) => repo.split("/")[1]
-    : (repo) => repo;
+  return owners.size === 1 ? (repo) => repo.split("/")[1] : (repo) => repo;
 }
 
-export function formatRepoDisplay(repos: string[]): string {
-  return repos.length <= 3
-    ? repos.join(", ")
-    : `${repos.length} repositories`;
+export function formatRepoDisplay(repos: readonly string[]): string {
+  if (repos.length <= 3) return repos.join(", ");
+  return `${repos.length} repositories`;
+}
+
+export function formatFetchSummary(
+  results: readonly FetchResult[],
+): string {
+  const active = results.filter((r) => r.runs.length > 0);
+  const skippedCount = results.length - active.length;
+  const failedCount = results.filter((r) => r.warnings.length > 0).length;
+
+  if (active.length === 0 && failedCount === 0) return "";
+
+  const warningSet = new Set(
+    results.filter((r) => r.warnings.length > 0).map((r) => r.repo),
+  );
+  const maxLen = active.length > 0
+    ? Math.max(...active.map((r) => r.repo.length))
+    : 0;
+  const lines = active.map((r) => {
+    const partial = warningSet.has(r.repo) ? " (partial)" : "";
+    return `  ${r.repo.padEnd(maxLen)}  ${String(r.runs.length).padStart(5)} runs${partial}`;
+  });
+
+  if (skippedCount > 0) {
+    const noun = skippedCount === 1 ? "repo" : "repos";
+    lines.push(`  (${skippedCount} ${noun} with no runs)`);
+  }
+
+  if (failedCount > 0) {
+    const noun = failedCount === 1 ? "repo" : "repos";
+    lines.push(`  (${failedCount} ${noun} had fetch errors)`);
+  }
+
+  return lines.join("\n");
 }
 
 const rightAligned = (content: string) =>
@@ -40,7 +73,7 @@ const rightAligned = (content: string) =>
 export function renderTable(data: AggregatedData): void {
   const { months, users, totals, workflows, repos } = data;
   const multiRepo = repos.length > 1;
-  const getRepoLabel = multiRepo ? shortRepoName(repos) : () => "";
+  const getRepoLabel = multiRepo ? shortRepoName(repos) : undefined;
 
   console.log();
   console.log(chalk.bold("GitHub Actions Usage Per Developer"));
@@ -70,7 +103,7 @@ export function renderTable(data: AggregatedData): void {
   for (const user of users) {
     table.push([
       user.actor,
-      ...(multiRepo ? [getRepoLabel(user.repo)] : []),
+      ...(getRepoLabel ? [getRepoLabel(user.repo)] : []),
       rightAligned(Math.round(user.totalMinutes).toLocaleString()),
       rightAligned((user.totalMinutes / 60).toFixed(1)),
       rightAligned(user.totalRuns.toLocaleString()),
@@ -113,30 +146,17 @@ export function renderTable(data: AggregatedData): void {
   );
 }
 
+function buildCsvRow(
+  fields: readonly (string | number)[],
+): string {
+  return fields.map(escapeCsvField).join(",");
+}
+
 export function renderCsv(data: AggregatedData, filePath?: string): void {
   const { months, users, totals, repos } = data;
   const multiRepo = repos.length > 1;
 
-  const buildRow = (
-    developer: string,
-    repo: string,
-    minutes: number,
-    hours: string,
-    runs: number,
-    monthly: number[],
-  ): string =>
-    [
-      developer,
-      ...(multiRepo ? [repo] : []),
-      minutes,
-      hours,
-      runs,
-      ...monthly,
-    ]
-      .map(escapeCsvField)
-      .join(",");
-
-  const headers = [
+  const headers: readonly string[] = [
     "developer",
     ...(multiRepo ? ["repo"] : []),
     "total_minutes",
@@ -146,25 +166,25 @@ export function renderCsv(data: AggregatedData, filePath?: string): void {
   ];
 
   const lines = [
-    headers.map(escapeCsvField).join(","),
+    buildCsvRow(headers),
     ...users.map((user) =>
-      buildRow(
+      buildCsvRow([
         user.actor,
-        user.repo,
+        ...(multiRepo ? [user.repo] : []),
         Math.round(user.totalMinutes),
         (user.totalMinutes / 60).toFixed(1),
         user.totalRuns,
-        months.map((m) => Math.round(user.monthlyMinutes[m] ?? 0)),
-      ),
+        ...months.map((m) => Math.round(user.monthlyMinutes[m] ?? 0)),
+      ]),
     ),
-    buildRow(
+    buildCsvRow([
       "TOTAL",
-      "",
+      ...(multiRepo ? [""] : []),
       Math.round(totals.minutes),
       (totals.minutes / 60).toFixed(1),
       totals.runs,
-      months.map((m) => Math.round(totals.monthly[m] ?? 0)),
-    ),
+      ...months.map((m) => Math.round(totals.monthly[m] ?? 0)),
+    ]),
   ];
 
   const csv = lines.join("\n") + "\n";

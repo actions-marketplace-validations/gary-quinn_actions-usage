@@ -6,12 +6,12 @@ import {
   checkGhCli,
   fetchRepoRuns,
   fetchMultiRepoRuns,
-  formatFetchSummary,
+  LARGE_ORG_THRESHOLD,
 } from "./github.js";
 import type { FetchResult } from "./github.js";
 import { resolveRepos, formatResolveLog } from "./resolve.js";
 import { aggregate } from "./aggregate.js";
-import { renderTable, renderCsv, renderJson, formatRepoDisplay } from "./output.js";
+import { renderTable, renderCsv, renderJson, formatRepoDisplay, formatFetchSummary } from "./output.js";
 import type { CliOptions } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,13 +27,19 @@ const startOfMonthStr = (): string => {
 };
 
 async function fetchRuns(
-  repos: string[],
+  repos: readonly string[],
   since: string,
   until: string,
-): Promise<FetchResult[]> {
+): Promise<readonly FetchResult[]> {
   process.stderr.write(
     `Fetching GitHub Actions runs for ${formatRepoDisplay(repos)} (${since} to ${until})...\n`,
   );
+
+  if (repos.length > LARGE_ORG_THRESHOLD) {
+    process.stderr.write(
+      `  Warning: scanning ${repos.length} repos — this may take a while and could hit API rate limits\n`,
+    );
+  }
 
   const results =
     repos.length === 1
@@ -92,6 +98,12 @@ const program = new Command()
 
       const results = await fetchRuns(options.repos, options.since, options.until);
       const runs = results.flatMap((r) => r.runs);
+
+      for (const r of results) {
+        for (const warning of r.warnings) {
+          process.stderr.write(`  Warning: ${warning}\n`);
+        }
+      }
 
       if (runs.length === 0) {
         process.stderr.write("No completed runs found in this period.\n");

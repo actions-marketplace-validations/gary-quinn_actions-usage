@@ -4,11 +4,13 @@ import {
   escapeCsvField,
   shortRepoName,
   formatRepoDisplay,
+  formatFetchSummary,
   renderTable,
   renderCsv,
   renderJson,
 } from "./output.js";
 import type { AggregatedData } from "./types.js";
+import type { FetchResult } from "./github.js";
 
 describe("formatMonthLabel", () => {
   it("converts YYYY-MM to abbreviated month with 2-digit year", () => {
@@ -70,8 +72,11 @@ describe("shortRepoName", () => {
 });
 
 describe("formatRepoDisplay", () => {
-  it("joins up to 3 repos with commas", () => {
+  it("returns single repo name", () => {
     expect(formatRepoDisplay(["org/a"])).toBe("org/a");
+  });
+
+  it("joins up to 3 repos with commas", () => {
     expect(formatRepoDisplay(["org/a", "org/b"])).toBe("org/a, org/b");
     expect(formatRepoDisplay(["a/1", "a/2", "a/3"])).toBe("a/1, a/2, a/3");
   });
@@ -80,6 +85,90 @@ describe("formatRepoDisplay", () => {
     expect(formatRepoDisplay(["a/1", "a/2", "a/3", "a/4"])).toBe(
       "4 repositories",
     );
+  });
+});
+
+describe("formatFetchSummary", () => {
+  const makeResult = (repo: string, count: number, warnings: string[] = []): FetchResult => ({
+    repo,
+    runs: Array.from({ length: count }, (_, i) => ({
+      id: i,
+      repo,
+      actor: "a",
+      workflow: "CI",
+      startedAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:01:00Z",
+    })),
+    warnings,
+  });
+
+  it("returns empty string when all repos have zero runs", () => {
+    expect(formatFetchSummary([makeResult("org/a", 0)])).toBe("");
+  });
+
+  it("formats single repo with runs", () => {
+    const summary = formatFetchSummary([makeResult("org/api", 42)]);
+    expect(summary).toContain("org/api");
+    expect(summary).toContain("42 runs");
+  });
+
+  it("aligns columns for multiple repos", () => {
+    const results = [
+      makeResult("org/api", 10),
+      makeResult("org/web-frontend", 200),
+    ];
+    const lines = formatFetchSummary(results).split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("org/api");
+    expect(lines[1]).toContain("org/web-frontend");
+  });
+
+  it("appends skipped repos count", () => {
+    const results = [
+      makeResult("org/api", 10),
+      makeResult("org/docs", 0),
+      makeResult("org/legacy", 0),
+    ];
+    const summary = formatFetchSummary(results);
+    expect(summary).toContain("(2 repos with no runs)");
+  });
+
+  it("uses singular for one skipped repo", () => {
+    const results = [
+      makeResult("org/api", 5),
+      makeResult("org/docs", 0),
+    ];
+    expect(formatFetchSummary(results)).toContain("(1 repo with no runs)");
+  });
+
+  it("reports repos with fetch errors", () => {
+    const results = [
+      makeResult("org/api", 10),
+      makeResult("org/broken", 0, ["Failed to fetch"]),
+    ];
+    const summary = formatFetchSummary(results);
+    expect(summary).toContain("(1 repo had fetch errors)");
+  });
+
+  it("marks repos with partial data", () => {
+    const results = [
+      makeResult("org/api", 5, ["Failed to fetch for 2025-02"]),
+      makeResult("org/web", 10),
+    ];
+    const summary = formatFetchSummary(results);
+    const apiLine = summary.split("\n").find((l) => l.includes("org/api"))!;
+    const webLine = summary.split("\n").find((l) => l.includes("org/web"))!;
+    expect(apiLine).toContain("(partial)");
+    expect(webLine).not.toContain("(partial)");
+  });
+
+  it("handles all repos failing with no runs", () => {
+    const results = [
+      makeResult("org/a", 0, ["timeout"]),
+      makeResult("org/b", 0, ["rate limited"]),
+    ];
+    const summary = formatFetchSummary(results);
+    expect(summary).toContain("(2 repos had fetch errors)");
   });
 });
 
@@ -152,6 +241,42 @@ function makeSampleData(multiRepo = false): AggregatedData {
   };
 }
 
+function makeSampleDataWithCommaActor(): AggregatedData {
+  return {
+    repos: ["org/repo"],
+    since: "2025-01-01",
+    until: "2025-02-28",
+    months: ["2025-01", "2025-02"],
+    users: [
+      {
+        actor: "alice, the dev",
+        repo: "org/repo",
+        totalMinutes: 90,
+        totalRuns: 2,
+        monthlyMinutes: { "2025-01": 60, "2025-02": 30 },
+        workflows: { CI: { minutes: 90, runs: 2 } },
+      },
+      {
+        actor: "bob",
+        repo: "org/repo",
+        totalMinutes: 45,
+        totalRuns: 1,
+        monthlyMinutes: { "2025-01": 45 },
+        workflows: { Deploy: { minutes: 45, runs: 1 } },
+      },
+    ],
+    totals: {
+      minutes: 135,
+      runs: 3,
+      monthly: { "2025-01": 105, "2025-02": 30 },
+    },
+    workflows: [
+      { name: "CI", minutes: 90, runs: 2 },
+      { name: "Deploy", minutes: 45, runs: 1 },
+    ],
+  };
+}
+
 describe("renderTable", () => {
   it("renders without Repo column for single repo", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -180,12 +305,11 @@ describe("renderTable", () => {
 
 describe("renderCsv", () => {
   it("outputs correct CSV to stdout (single repo, no repo column)", () => {
-    const data = makeSampleData();
     const writeSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
 
-    renderCsv(data);
+    renderCsv(makeSampleData());
 
     const output = writeSpy.mock.calls.map(([c]) => c).join("");
     writeSpy.mockRestore();
@@ -198,12 +322,11 @@ describe("renderCsv", () => {
   });
 
   it("includes repo column for multi-repo", () => {
-    const data = makeSampleData(true);
     const writeSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
 
-    renderCsv(data);
+    renderCsv(makeSampleData(true));
 
     const output = writeSpy.mock.calls.map(([c]) => c).join("");
     writeSpy.mockRestore();
@@ -216,13 +339,11 @@ describe("renderCsv", () => {
   });
 
   it("escapes actor names with commas", () => {
-    const data = makeSampleData();
-    data.users[0].actor = "alice, the dev";
     const writeSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
 
-    renderCsv(data);
+    renderCsv(makeSampleDataWithCommaActor());
 
     const output = writeSpy.mock.calls.map(([c]) => c).join("");
     writeSpy.mockRestore();
@@ -233,10 +354,9 @@ describe("renderCsv", () => {
 
 describe("renderJson", () => {
   it("outputs valid JSON with correct structure", () => {
-    const data = makeSampleData();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    renderJson(data);
+    renderJson(makeSampleData());
 
     const output = logSpy.mock.calls.map(([c]) => c).join("");
     logSpy.mockRestore();
@@ -254,10 +374,9 @@ describe("renderJson", () => {
   });
 
   it("uses YYYY-MM keys in monthly breakdown", () => {
-    const data = makeSampleData();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    renderJson(data);
+    renderJson(makeSampleData());
 
     const output = logSpy.mock.calls.map(([c]) => c).join("");
     logSpy.mockRestore();
@@ -267,10 +386,9 @@ describe("renderJson", () => {
   });
 
   it("includes repo per user in multi-repo JSON", () => {
-    const data = makeSampleData(true);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    renderJson(data);
+    renderJson(makeSampleData(true));
 
     const output = logSpy.mock.calls.map(([c]) => c).join("");
     logSpy.mockRestore();

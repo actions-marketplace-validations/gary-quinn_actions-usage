@@ -2,6 +2,8 @@
 
 Show GitHub Actions usage metrics per developer for any repository or organization.
 
+> **Breaking changes in 0.2.0:** JSON output `repo: string` is now `repos: string[]`, and each user entry includes a `repo` field.
+
 ## Prerequisites
 
 - [GitHub CLI (`gh`)](https://cli.github.com) installed and authenticated
@@ -92,7 +94,7 @@ For single-repo usage, the output matches the original format with no Repo colum
 
 Queries the GitHub Actions API via `gh api` to fetch all completed workflow runs in the specified period, then calculates wall-clock duration per developer by measuring the time between `run_started_at` and `updated_at`.
 
-For organizations, repos are fetched in batches of 5 concurrently. Archived, disabled, and forked repos are excluded by default.
+For organizations, repos are fetched concurrently (5 at a time). Archived, disabled, and forked repos are excluded by default.
 
 **Note:** These are wall-clock durations (from `run_started_at` to `updated_at`), not GitHub billable minutes. Wall-clock includes queue time and approval wait. The billing API does not expose per-run billable minutes for private repositories.
 

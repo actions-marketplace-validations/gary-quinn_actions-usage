@@ -4,15 +4,12 @@ import type { WorkflowRun } from "./types.js";
 
 const execFile = promisify(execFileCb);
 
-const REPO_CONCURRENCY = 5;
-const LARGE_ORG_THRESHOLD = 50;
-const REPO_FORMAT = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+export const REPO_CONCURRENCY = 5;
+export const LARGE_ORG_THRESHOLD = 50;
 
-const parseStdout = (stdout: string): string[] =>
-  stdout
-    .trim()
-    .split("\n")
-    .filter((line) => line.trim());
+const REPO_FORMAT = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+const ORG_NAME = /^[a-zA-Z0-9][a-zA-Z0-9-]*$/;
 
 export function validateRepoFormat(repo: string): void {
   if (!REPO_FORMAT.test(repo)) {
@@ -21,6 +18,20 @@ export function validateRepoFormat(repo: string): void {
     );
   }
 }
+
+function validateOrgName(org: string): void {
+  if (!ORG_NAME.test(org)) {
+    throw new Error(
+      `Invalid org name: "${org}". Expected alphanumeric with hyphens (e.g. "my-org")`,
+    );
+  }
+}
+
+const parseStdout = (stdout: string): readonly string[] =>
+  stdout
+    .trim()
+    .split("\n")
+    .filter((line) => line.trim());
 
 export async function detectRepo(): Promise<string> {
   let url: string;
@@ -54,7 +65,9 @@ export async function checkGhCli(): Promise<void> {
   }
 }
 
-export async function fetchOrgRepos(org: string): Promise<string[]> {
+export async function fetchOrgRepos(org: string): Promise<readonly string[]> {
+  validateOrgName(org);
+
   let stdout: string;
   try {
     ({ stdout } = await execFile(
@@ -79,15 +92,15 @@ export async function fetchOrgRepos(org: string): Promise<string[]> {
     throw new Error(`No accessible repositories found in org "${org}"`);
   }
 
-  return repos.sort();
+  return [...repos].sort();
 }
 
 interface RawRun {
-  id: number;
-  actor: string;
-  workflow: string;
-  started: string;
-  updated: string;
+  readonly id: number;
+  readonly actor: string;
+  readonly workflow: string;
+  readonly started: string;
+  readonly updated: string;
 }
 
 const JQ_FILTER =
@@ -111,7 +124,7 @@ async function fetchRunsForPeriod(
   repo: string,
   start: string,
   end: string,
-): Promise<WorkflowRun[]> {
+): Promise<readonly WorkflowRun[]> {
   try {
     const { stdout } = await execFile(
       "gh",
@@ -128,17 +141,16 @@ async function fetchRunsForPeriod(
     return parseStdout(stdout).map(parseRunLine(repo));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `  Warning: failed to fetch runs for ${repo} ${start}..${end}: ${detail}\n`,
+    throw new Error(
+      `Failed to fetch runs for ${repo} ${start}..${end}: ${detail}`,
     );
-    return [];
   }
 }
 
 export function getMonthPeriods(
   since: string,
   until: string,
-): { start: string; end: string }[] {
+): readonly { readonly start: string; readonly end: string }[] {
   const periods: { start: string; end: string }[] = [];
   const startDate = new Date(since);
   const endDate = new Date(until);
@@ -165,8 +177,9 @@ export function getMonthPeriods(
 }
 
 export interface FetchResult {
-  repo: string;
-  runs: WorkflowRun[];
+  readonly repo: string;
+  readonly runs: readonly WorkflowRun[];
+  readonly warnings: readonly string[];
 }
 
 export async function fetchRepoRuns(
@@ -175,59 +188,56 @@ export async function fetchRepoRuns(
   until: string,
 ): Promise<FetchResult> {
   const periods = getMonthPeriods(since, until);
+  const allRuns: WorkflowRun[] = [];
+  const warnings: string[] = [];
 
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     periods.map((period) => fetchRunsForPeriod(repo, period.start, period.end)),
   );
 
-  return { repo, runs: results.flat() };
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      allRuns.push(...result.value);
+    } else {
+      warnings.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+    }
+  }
+
+  return { repo, runs: allRuns, warnings };
 }
 
-async function processBatch<T, R>(
-  items: T[],
+// Safe because Node.js is single-threaded: nextIndex++ and the while check
+// run synchronously between await points, so no two workers ever claim the
+// same index. Each worker yields only at `await fn(...)`.
+async function runWithConcurrency<T, R>(
+  items: readonly T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(fn));
-    results.push(...batchResults);
+): Promise<readonly R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await fn(items[index]);
+    }
   }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
   return results;
 }
 
 export async function fetchMultiRepoRuns(
-  repos: string[],
+  repos: readonly string[],
   since: string,
   until: string,
-): Promise<FetchResult[]> {
-  if (repos.length > LARGE_ORG_THRESHOLD) {
-    process.stderr.write(
-      `  Warning: scanning ${repos.length} repos — this may take a while and could hit API rate limits\n`,
-    );
-  }
-
-  return processBatch(repos, REPO_CONCURRENCY, (repo) =>
+): Promise<readonly FetchResult[]> {
+  return runWithConcurrency(repos, REPO_CONCURRENCY, (repo) =>
     fetchRepoRuns(repo, since, until),
   );
-}
-
-export function formatFetchSummary(results: FetchResult[]): string {
-  const active = results.filter((r) => r.runs.length > 0);
-  const skipped = results.length - active.length;
-
-  if (active.length === 0) return "";
-
-  const maxLen = Math.max(...active.map((r) => r.repo.length));
-  const lines = active.map(
-    (r) =>
-      `  ${r.repo.padEnd(maxLen)}  ${String(r.runs.length).padStart(5)} runs`,
-  );
-
-  if (skipped > 0) {
-    lines.push(`  (${skipped} repo${skipped > 1 ? "s" : ""} with no runs)`);
-  }
-
-  return lines.join("\n");
 }
