@@ -12,6 +12,7 @@ import {
 } from "./output.js";
 import type { AggregatedData } from "./types.js";
 import type { FetchResult } from "./github.js";
+import { readFileSync, unlinkSync } from "node:fs";
 
 describe("formatMonthLabel", () => {
   it("converts YYYY-MM to abbreviated month with 2-digit year", () => {
@@ -391,7 +392,6 @@ describe("renderMarkdown", () => {
   });
 
   it("writes markdown to file when filePath is provided", () => {
-    const fs = require("node:fs");
     const tmpFile = `/tmp/actions-usage-test-${Date.now()}.md`;
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -401,10 +401,10 @@ describe("renderMarkdown", () => {
     expect(writeSpy).not.toHaveBeenCalled();
     writeSpy.mockRestore();
 
-    const content = fs.readFileSync(tmpFile, "utf-8");
+    const content = readFileSync(tmpFile, "utf-8");
     expect(content).toContain("## GitHub Actions Usage Report");
     expect(content).toContain("| alice |");
-    fs.unlinkSync(tmpFile);
+    unlinkSync(tmpFile);
   });
 });
 
