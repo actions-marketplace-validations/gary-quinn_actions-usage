@@ -8,9 +8,11 @@ import {
   renderTable,
   renderCsv,
   renderJson,
+  renderMarkdown,
 } from "./output.js";
 import type { AggregatedData } from "./types.js";
 import type { FetchResult } from "./github.js";
+import { readFileSync, unlinkSync } from "node:fs";
 
 describe("formatMonthLabel", () => {
   it("converts YYYY-MM to abbreviated month with 2-digit year", () => {
@@ -349,6 +351,60 @@ describe("renderCsv", () => {
     writeSpy.mockRestore();
 
     expect(output).toContain('"alice, the dev"');
+  });
+});
+
+describe("renderMarkdown", () => {
+  it("outputs markdown table for single repo", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    renderMarkdown(makeSampleData());
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
+
+    expect(output).toContain("## GitHub Actions Usage Report");
+    expect(output).toContain("**org/repo**");
+    expect(output).toContain("| Developer | Minutes | Hours | Runs |");
+    expect(output).toContain("| alice |");
+    expect(output).toContain("| **TOTAL** |");
+    expect(output).not.toContain("| Repo |");
+  });
+
+  it("includes Repo column for multi-repo", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    renderMarkdown(makeSampleData(true));
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
+
+    expect(output).toContain("**2 repositories**");
+    expect(output).toContain("| Developer | Repo | Minutes |");
+    expect(output).toContain("| alice | api |");
+  });
+
+  it("includes workflows in details section", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    renderMarkdown(makeSampleData());
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
+
+    expect(output).toContain("<details>");
+    expect(output).toContain("Top workflows");
+    expect(output).toContain("| CI |");
+  });
+
+  it("writes markdown to file when filePath is provided", () => {
+    const tmpFile = `/tmp/actions-usage-test-${Date.now()}.md`;
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    renderMarkdown(makeSampleData(), tmpFile);
+
+    // Should NOT write to stdout
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+
+    const content = readFileSync(tmpFile, "utf-8");
+    expect(content).toContain("## GitHub Actions Usage Report");
+    expect(content).toContain("| alice |");
+    unlinkSync(tmpFile);
   });
 });
 

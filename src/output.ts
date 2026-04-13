@@ -197,6 +197,86 @@ export function renderCsv(data: AggregatedData, filePath?: string): void {
   }
 }
 
+export function renderMarkdown(data: AggregatedData, filePath?: string): void {
+  const { months, users, totals, workflows, repos } = data;
+  const multiRepo = repos.length > 1;
+  const getRepoLabel = multiRepo ? shortRepoName(repos) : undefined;
+
+  const lines: string[] = [];
+
+  lines.push("## GitHub Actions Usage Report");
+  lines.push("");
+  lines.push(
+    multiRepo
+      ? `**${repos.length} repositories** | ${data.since} to ${data.until}`
+      : `**${repos[0]}** | ${data.since} to ${data.until}`,
+  );
+  lines.push("");
+
+  // Table header
+  const headers = [
+    "Developer",
+    ...(multiRepo ? ["Repo"] : []),
+    "Minutes",
+    "Hours",
+    "Runs",
+    ...months.map(formatMonthLabel),
+  ];
+  lines.push(`| ${headers.join(" | ")} |`);
+  const align = headers.map((_, i) =>
+    i === 0 || (multiRepo && i === 1) ? "---" : "---:",
+  );
+  lines.push(`| ${align.join(" | ")} |`);
+
+  // User rows
+  for (const user of users) {
+    const cells = [
+      user.actor,
+      ...(getRepoLabel ? [getRepoLabel(user.repo)] : []),
+      String(Math.round(user.totalMinutes)),
+      (user.totalMinutes / 60).toFixed(1),
+      String(user.totalRuns),
+      ...months.map((m) => String(Math.round(user.monthlyMinutes[m] ?? 0))),
+    ];
+    lines.push(`| ${cells.join(" | ")} |`);
+  }
+
+  // Totals row
+  const totalCells = [
+    "**TOTAL**",
+    ...(multiRepo ? [""] : []),
+    `**${Math.round(totals.minutes)}**`,
+    `**${(totals.minutes / 60).toFixed(1)}**`,
+    `**${totals.runs}**`,
+    ...months.map((m) => `**${Math.round(totals.monthly[m] ?? 0)}**`),
+  ];
+  lines.push(`| ${totalCells.join(" | ")} |`);
+
+  // Top workflows
+  if (workflows.length > 0) {
+    lines.push("");
+    lines.push("<details>");
+    lines.push("<summary>Top workflows</summary>");
+    lines.push("");
+    lines.push("| Workflow | Minutes | Runs |");
+    lines.push("|----------|--------:|-----:|");
+    for (const wf of workflows.slice(0, 10)) {
+      lines.push(`| ${wf.name} | ${Math.round(wf.minutes)} | ${wf.runs} |`);
+    }
+    lines.push("");
+    lines.push("</details>");
+  }
+
+  const markdown = lines.join("\n") + "\n";
+
+  if (filePath) {
+    writeFileSync(filePath, markdown, "utf-8");
+    process.stderr.write(`Markdown written to ${filePath}\n`);
+  } else {
+    process.stdout.write(markdown);
+  }
+}
+
 export function renderJson(data: AggregatedData): void {
   const output = {
     repos: data.repos,

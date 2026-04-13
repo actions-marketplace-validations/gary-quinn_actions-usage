@@ -1,0 +1,212 @@
+name: 'Actions Usage Report'
+description: 'Post GitHub Actions usage metrics per developer as PR comments or issue reports'
+author: 'gary-quinn'
+
+branding:
+  icon: 'bar-chart-2'
+  color: 'blue'
+
+inputs:
+  mode:
+    description: 'Output mode: pr-comment, issue, or both'
+    default: 'pr-comment'
+  org:
+    description: 'GitHub org to scan (default: current repo only)'
+    required: false
+  repos:
+    description: 'Comma-separated list of repos (default: current repo)'
+    required: false
+  since:
+    description: 'Start date YYYY-MM-DD (default: start of current month)'
+    required: false
+  until:
+    description: 'End date YYYY-MM-DD (default: today)'
+    required: false
+  sort:
+    description: 'Sort by: minutes, runs, name'
+    default: 'minutes'
+  issue-title:
+    description: 'Title for issue report'
+    default: 'GitHub Actions Usage Report'
+  issue-labels:
+    description: 'Comma-separated labels for issue'
+    default: 'report,actions-usage'
+
+outputs:
+  json:
+    description: 'JSON output of the report'
+    value: ${{ steps.report.outputs.json }}
+  markdown:
+    description: 'Markdown output of the report'
+    value: ${{ steps.report.outputs.markdown }}
+  issue-url:
+    description: 'URL of created issue (if mode includes issue)'
+    value: ${{ steps.issue.outputs.url }}
+  comment-url:
+    description: 'URL of PR comment (if mode includes pr-comment)'
+    value: ${{ steps.comment.outputs.url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version: '20'
+
+    - name: Build from source
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --ignore-scripts && npm run build
+
+    - name: Validate mode
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        case "$INPUT_MODE" in
+          pr-comment|issue|both) ;;
+          *) echo "::error::Invalid mode: $INPUT_MODE (must be pr-comment, issue, or both)"; exit 1 ;;
+        esac
+
+        if [[ "$INPUT_MODE" == "pr-comment" && "$EVENT_NAME" != "pull_request" ]]; then
+          echo "::error::mode 'pr-comment' requires pull_request event (got $EVENT_NAME)"
+          exit 1
+        fi
+
+    - name: Run actions-usage
+      id: report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INPUT_ORG: ${{ inputs.org }}
+        INPUT_REPOS: ${{ inputs.repos }}
+        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_UNTIL: ${{ inputs.until }}
+        INPUT_SORT: ${{ inputs.sort }}
+        INPUT_REPO_FALLBACK: ${{ github.repository }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        ARGS=("--sort" "$INPUT_SORT")
+
+        if [ -n "$INPUT_ORG" ]; then
+          ARGS+=("--org" "$INPUT_ORG")
+        fi
+
+        if [ -n "$INPUT_REPOS" ]; then
+          IFS=',' read -ra REPOS <<< "$INPUT_REPOS"
+          ARGS+=("--repo" "${REPOS[@]}")
+        fi
+
+        if [ -n "$INPUT_SINCE" ]; then ARGS+=("--since" "$INPUT_SINCE"); fi
+        if [ -n "$INPUT_UNTIL" ]; then ARGS+=("--until" "$INPUT_UNTIL"); fi
+
+        # Default: current repo
+        if [ -z "$INPUT_ORG" ] && [ -z "$INPUT_REPOS" ]; then
+          ARGS+=("--repo" "$INPUT_REPO_FALLBACK")
+        fi
+
+        MD_FILE="$RUNNER_TEMP/actions-usage-report.md"
+
+        # Single CLI run: JSON to stdout, markdown to file
+        if ! JSON=$(node "$ACTION_PATH/dist/cli.js" --format json --markdown-file "$MD_FILE" "${ARGS[@]}" 2>"$RUNNER_TEMP/actions-usage-stderr.log"); then
+          echo "::warning::actions-usage failed — see stderr below"
+          cat "$RUNNER_TEMP/actions-usage-stderr.log" >&2
+          exit 1
+        fi
+
+        {
+          echo "json<<ACTIONS_USAGE_EOF"
+          echo "$JSON"
+          echo "ACTIONS_USAGE_EOF"
+          echo "markdown<<ACTIONS_USAGE_MD_EOF"
+          cat "$MD_FILE"
+          echo "ACTIONS_USAGE_MD_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Post PR comment
+      id: comment
+      if: >-
+        (inputs.mode == 'pr-comment' || inputs.mode == 'both')
+        && github.event_name == 'pull_request'
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      env:
+        MARKDOWN_BODY: ${{ steps.report.outputs.markdown }}
+      with:
+        script: |
+          const marker = '<!-- actions-usage-report -->';
+          const body = `${marker}\n${process.env.MARKDOWN_BODY}`;
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+
+          const comments = await github.rest.issues.listComments({
+            owner, repo, issue_number,
+          });
+          const existing = comments.data.find(c => c.body?.startsWith(marker));
+
+          let url;
+          if (existing) {
+            const updated = await github.rest.issues.updateComment({
+              owner, repo, comment_id: existing.id, body,
+            });
+            url = updated.data.html_url;
+          } else {
+            const created = await github.rest.issues.createComment({
+              owner, repo, issue_number, body,
+            });
+            url = created.data.html_url;
+          }
+
+          core.setOutput('url', url);
+
+    - name: Create or update issue
+      id: issue
+      if: >-
+        (inputs.mode == 'issue' || inputs.mode == 'both')
+        && github.event_name != 'pull_request'
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      env:
+        MARKDOWN_BODY: ${{ steps.report.outputs.markdown }}
+        ISSUE_TITLE: ${{ inputs.issue-title }}
+        ISSUE_LABELS: ${{ inputs.issue-labels }}
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          const title = process.env.ISSUE_TITLE;
+          const labels = process.env.ISSUE_LABELS
+            .split(',')
+            .map(l => l.trim())
+            .filter(Boolean);
+          const marker = '<!-- actions-usage-report -->';
+          const body = `${marker}\n${process.env.MARKDOWN_BODY}`;
+
+          // Find existing open issue with same title
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner, repo,
+            state: 'open',
+            labels: labels.join(','),
+            per_page: 10,
+          });
+          const existing = issues.find(i =>
+            i.title === title && i.body?.startsWith(marker)
+          );
+
+          let url;
+          if (existing) {
+            const updated = await github.rest.issues.update({
+              owner, repo,
+              issue_number: existing.number,
+              body,
+            });
+            url = updated.data.html_url;
+            core.info(`Updated existing issue #${existing.number}`);
+          } else {
+            const created = await github.rest.issues.create({
+              owner, repo, title, body, labels,
+            });
+            url = created.data.html_url;
+            core.info(`Created issue #${created.data.number}`);
+          }
+
+          core.setOutput('url', url);

@@ -11,7 +11,7 @@ import {
 import type { FetchResult } from "./github.js";
 import { resolveRepos, formatResolveLog } from "./resolve.js";
 import { aggregate } from "./aggregate.js";
-import { renderTable, renderCsv, renderJson, formatRepoDisplay, formatFetchSummary } from "./output.js";
+import { renderTable, renderCsv, renderJson, renderMarkdown, formatRepoDisplay, formatFetchSummary } from "./output.js";
 import type { CliOptions } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -68,7 +68,7 @@ const program = new Command()
   .option("--until <date>", "end date YYYY-MM-DD (default: today)")
   .addOption(
     new Option("--format <type>", "output format")
-      .choices(["table", "csv", "json"])
+      .choices(["table", "csv", "json", "markdown"])
       .default("table"),
   )
   .addOption(
@@ -77,6 +77,7 @@ const program = new Command()
       .default("minutes"),
   )
   .option("--csv <path>", "export CSV to file")
+  .option("--markdown-file <path>", "export markdown to file (in addition to primary format)")
   .action(async (opts) => {
     try {
       const options: CliOptions = {
@@ -87,6 +88,7 @@ const program = new Command()
         format: opts.format ?? "table",
         sort: opts.sort ?? "minutes",
         csv: opts.csv,
+        markdownFile: opts.markdownFile,
       };
 
       await checkGhCli();
@@ -124,12 +126,19 @@ const program = new Command()
         renderCsv(data, options.csv);
       }
 
+      if (options.markdownFile) {
+        renderMarkdown(data, options.markdownFile);
+      }
+
       switch (options.format) {
         case "csv":
           renderCsv(data);
           break;
         case "json":
           renderJson(data);
+          break;
+        case "markdown":
+          renderMarkdown(data);
           break;
         default:
           renderTable(data);
