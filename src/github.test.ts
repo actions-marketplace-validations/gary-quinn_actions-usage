@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   getMonthPeriods,
   validateRepoFormat,
   runWithConcurrency,
+  withRetry,
 } from "./github.js";
 
 describe("getMonthPeriods", () => {
@@ -102,5 +103,56 @@ describe("runWithConcurrency", () => {
   it("handles concurrency larger than items", async () => {
     const results = await runWithConcurrency([1, 2], 10, async (x) => x * 2);
     expect(results).toEqual([2, 4]);
+  });
+});
+
+describe("withRetry", () => {
+  it("returns on first success without retrying", async () => {
+    let attempts = 0;
+    const result = await withRetry(async () => { attempts++; return "ok"; }, 3);
+    expect(result).toBe("ok");
+    expect(attempts).toBe(1);
+  });
+
+  it("retries on rate limit error and logs to stderr", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let attempts = 0;
+    const result = await withRetry(async () => {
+      attempts++;
+      if (attempts < 3) throw new Error("rate limit exceeded");
+      return "ok";
+    }, 3);
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(3);
+    const messages = stderrSpy.mock.calls.map(([c]) => String(c));
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain("retrying");
+    expect(messages[0]).toContain("1/3");
+    stderrSpy.mockRestore();
+  });
+
+  it("throws non-rate-limit errors immediately without retrying", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(async () => {
+        attempts++;
+        throw new Error("not found");
+      }, 3),
+    ).rejects.toThrow("not found");
+    expect(attempts).toBe(1);
+  });
+
+  it("throws after exhausting all retries", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let attempts = 0;
+    await expect(
+      withRetry(async () => {
+        attempts++;
+        throw new Error("429 rate limit");
+      }, 2),
+    ).rejects.toThrow("429 rate limit");
+    expect(attempts).toBe(3);
+    stderrSpy.mockRestore();
   });
 });

@@ -120,22 +120,60 @@ const parseRunLine =
     };
   };
 
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 1000;
+
+function isRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("rate limit") || msg.includes("429") || msg.includes("secondary rate limit");
+}
+
+/**
+ * Retry a function on rate limit errors with exponential backoff.
+ * @param fn - async function to execute
+ * @param retries - number of retry attempts (not counting the initial call)
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries: number = MAX_RETRIES,
+): Promise<T> {
+  let lastError: unknown;
+  const totalAttempts = retries + 1;
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < totalAttempts && isRateLimitError(err)) {
+        const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+        process.stderr.write(`  Rate limited, retrying in ${delay}ms (attempt ${attempt}/${retries})...\n`);
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function fetchRunsForPeriod(
   repo: string,
   start: string,
   end: string,
 ): Promise<readonly WorkflowRun[]> {
   try {
-    const { stdout } = await execFile(
-      "gh",
-      [
-        "api",
-        `/repos/${repo}/actions/runs?created=${start}..${end}&per_page=100&status=completed`,
-        "--paginate",
-        "--jq",
-        JQ_FILTER,
-      ],
-      { maxBuffer: 50 * 1024 * 1024 },
+    const { stdout } = await withRetry(() =>
+      execFile(
+        "gh",
+        [
+          "api",
+          `/repos/${repo}/actions/runs?created=${start}..${end}&per_page=100&status=completed`,
+          "--paginate",
+          "--jq",
+          JQ_FILTER,
+        ],
+        { maxBuffer: 50 * 1024 * 1024 },
+      ),
     );
 
     return parseStdout(stdout).map(parseRunLine(repo));
