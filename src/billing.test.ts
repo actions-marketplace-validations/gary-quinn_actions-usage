@@ -7,7 +7,6 @@ import {
   RUNNER_OS_KEYS,
 } from "./billing.js";
 import type { RunTiming } from "./billing.js";
-import type { WorkflowRun } from "./types.js";
 
 describe("formatDollar", () => {
   it("formats zero", () => {
@@ -56,18 +55,21 @@ describe("calculateRunCost", () => {
       8 * GITHUB_RATES.WINDOWS;
     expect(cost).toBeCloseTo(expected);
   });
+
+  it("handles fractional minutes correctly", () => {
+    // 90 seconds = 1.5 minutes -> 1.5 * 0.008 = 0.012
+    const cost = calculateRunCost({ UBUNTU: 1.5, MACOS: 0, WINDOWS: 0 });
+    expect(cost).toBeCloseTo(1.5 * GITHUB_RATES.UBUNTU);
+  });
+
+  it("handles sub-minute fractions", () => {
+    // 20 seconds = 0.333... minutes
+    const cost = calculateRunCost({ UBUNTU: 0.333, MACOS: 0, WINDOWS: 0 });
+    expect(cost).toBeCloseTo(0.333 * GITHUB_RATES.UBUNTU);
+  });
 });
 
 describe("aggregatePrCost", () => {
-  const makeRun = (id: number, workflow: string): WorkflowRun => ({
-    id,
-    repo: "org/repo",
-    actor: "dev",
-    workflow,
-    startedAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:10:00Z",
-  });
-
   const makeTiming = (
     runId: number,
     workflow: string,
@@ -76,13 +78,11 @@ describe("aggregatePrCost", () => {
     runId,
     workflow,
     billable,
-    durationMs: 600_000,
   });
 
   it("aggregates a single run", () => {
-    const runs = [makeRun(1, "CI")];
     const timings = [makeTiming(1, "CI", { UBUNTU: 5, MACOS: 0, WINDOWS: 0 })];
-    const summary = aggregatePrCost(timings, runs, 42, "org/repo");
+    const summary = aggregatePrCost(timings, 42, "org/repo");
 
     expect(summary.pr).toBe(42);
     expect(summary.repo).toBe("org/repo");
@@ -95,12 +95,11 @@ describe("aggregatePrCost", () => {
   });
 
   it("aggregates multiple runs of the same workflow", () => {
-    const runs = [makeRun(1, "CI"), makeRun(2, "CI")];
     const timings = [
       makeTiming(1, "CI", { UBUNTU: 5, MACOS: 0, WINDOWS: 0 }),
       makeTiming(2, "CI", { UBUNTU: 3, MACOS: 0, WINDOWS: 0 }),
     ];
-    const summary = aggregatePrCost(timings, runs, 42, "org/repo");
+    const summary = aggregatePrCost(timings, 42, "org/repo");
 
     expect(summary.runCount).toBe(2);
     expect(summary.totalBillableMinutes.UBUNTU).toBe(8);
@@ -109,12 +108,11 @@ describe("aggregatePrCost", () => {
   });
 
   it("aggregates multiple workflows sorted by cost descending", () => {
-    const runs = [makeRun(1, "CI"), makeRun(2, "Deploy")];
     const timings = [
       makeTiming(1, "CI", { UBUNTU: 2, MACOS: 0, WINDOWS: 0 }),
       makeTiming(2, "Deploy", { UBUNTU: 0, MACOS: 10, WINDOWS: 0 }),
     ];
-    const summary = aggregatePrCost(timings, runs, 7, "org/repo");
+    const summary = aggregatePrCost(timings, 7, "org/repo");
 
     expect(summary.workflows).toHaveLength(2);
     // Deploy (macOS) should be more expensive than CI (Linux)
@@ -123,7 +121,7 @@ describe("aggregatePrCost", () => {
   });
 
   it("handles empty timings", () => {
-    const summary = aggregatePrCost([], [], 1, "org/repo");
+    const summary = aggregatePrCost([], 1, "org/repo");
 
     expect(summary.runCount).toBe(0);
     expect(summary.totalCost).toBe(0);
@@ -131,5 +129,17 @@ describe("aggregatePrCost", () => {
     for (const os of RUNNER_OS_KEYS) {
       expect(summary.totalBillableMinutes[os]).toBe(0);
     }
+  });
+
+  it("handles fractional billable minutes", () => {
+    const timings = [
+      makeTiming(1, "CI", { UBUNTU: 3.5, MACOS: 0.75, WINDOWS: 0 }),
+    ];
+    const summary = aggregatePrCost(timings, 10, "org/repo");
+
+    expect(summary.totalBillableMinutes.UBUNTU).toBeCloseTo(3.5);
+    expect(summary.totalBillableMinutes.MACOS).toBeCloseTo(0.75);
+    const expected = 3.5 * GITHUB_RATES.UBUNTU + 0.75 * GITHUB_RATES.MACOS;
+    expect(summary.totalCost).toBeCloseTo(expected);
   });
 });

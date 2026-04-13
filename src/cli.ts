@@ -81,7 +81,13 @@ const program = new Command()
     new Option("--group-by <field>", "group results by field")
       .choices(["actor"])
   )
-  .option("--pr <number>", "show CI cost for a specific pull request", parseInt)
+  .option("--pr <number>", "show CI cost for a specific pull request", (val: string) => {
+    const n = Number(val);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(`--pr must be a positive integer, got "${val}"`);
+    }
+    return n;
+  })
   .option("--include-forks", "include forked repos when scanning an org")
   .option("--include-archived", "include archived repos when scanning an org")
   .option("--csv <path>", "export CSV to file")
@@ -106,17 +112,21 @@ const program = new Command()
 
       await checkGhCli();
 
+      const resolved = await resolveRepos(options.org, options.repos, {
+        exclude: options.exclude,
+        includeForks: options.includeForks,
+        includeArchived: options.includeArchived,
+      });
+      const resolveLog = formatResolveLog(resolved, options.org);
+      if (resolveLog) process.stderr.write(resolveLog + "\n");
+      options.repos = resolved.repos;
+
       if (options.pr !== undefined) {
         // --- Per-PR cost tracking mode ---
-        const resolved = await resolveRepos(options.org, options.repos, {
-          exclude: options.exclude,
-          includeForks: options.includeForks,
-          includeArchived: options.includeArchived,
-        });
-        if (resolved.repos.length !== 1) {
+        if (options.repos.length !== 1) {
           throw new Error("--pr requires exactly one repository (use --repo owner/repo)");
         }
-        const repo = resolved.repos[0];
+        const repo = options.repos[0];
 
         process.stderr.write(`Fetching CI runs for ${repo} PR #${options.pr}...\n`);
         const prRuns = await fetchPrRuns(repo, options.pr);
@@ -127,9 +137,18 @@ const program = new Command()
         }
 
         process.stderr.write(`Found ${prRuns.length} run${prRuns.length !== 1 ? "s" : ""}, fetching billing data...\n`);
-        const timings = await fetchPrTimings(repo, prRuns);
-        const summary = aggregatePrCost(timings, prRuns, options.pr, repo);
+        const { timings, warnings } = await fetchPrTimings(repo, prRuns);
 
+        for (const warning of warnings) {
+          process.stderr.write(`  Warning: ${warning}\n`);
+        }
+
+        if (timings.length === 0) {
+          process.stderr.write("Could not fetch billing data for any run.\n");
+          process.exit(EXIT_NO_DATA);
+        }
+
+        const summary = aggregatePrCost(timings, options.pr, repo);
         const markdown = renderPrCostMarkdown(summary);
 
         if (options.markdownFile) {
@@ -141,24 +160,11 @@ const program = new Command()
           case "json":
             process.stdout.write(renderPrCostJson(summary));
             break;
-          case "markdown":
-            process.stdout.write(markdown);
-            break;
           default:
-            // For table/csv, default to markdown since cost display is markdown-native
             process.stdout.write(markdown);
         }
       } else {
         // --- Standard usage report mode ---
-        const resolved = await resolveRepos(options.org, options.repos, {
-          exclude: options.exclude,
-          includeForks: options.includeForks,
-          includeArchived: options.includeArchived,
-        });
-        const resolveLog = formatResolveLog(resolved, options.org);
-        if (resolveLog) process.stderr.write(resolveLog + "\n");
-        options.repos = resolved.repos;
-
         const results = await fetchRuns(options.repos, options.since, options.until);
         const runs = results.flatMap((r) => r.runs);
 

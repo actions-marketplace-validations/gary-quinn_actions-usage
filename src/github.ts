@@ -297,17 +297,27 @@ export async function fetchMultiRepoRuns(
 
 export const TIMING_CONCURRENCY = 10;
 
-interface RawPrRun {
-  readonly id: number;
-  readonly actor: string;
-  readonly workflow: string;
-  readonly started: string;
-  readonly updated: string;
-  readonly prs: readonly number[];
+async function fetchPrHeadBranch(repo: string, pr: number): Promise<string> {
+  try {
+    const { stdout } = await withRetry(() =>
+      execFile("gh", [
+        "api",
+        `/repos/${repo}/pulls/${pr}`,
+        "--jq",
+        ".head.ref",
+      ]),
+    );
+    const branch = stdout.trim();
+    if (!branch) {
+      throw new Error(`PR #${pr} returned empty head branch`);
+    }
+    return branch;
+  } catch (err) {
+    throw new Error(`Failed to fetch PR #${pr} head branch for ${repo}`, {
+      cause: err,
+    });
+  }
 }
-
-const PR_JQ_FILTER =
-  ".workflow_runs[] | {id: .id, actor: .triggering_actor.login, workflow: .name, started: .run_started_at, updated: .updated_at, prs: [.pull_requests[]?.number]}";
 
 export async function fetchPrRuns(
   repo: string,
@@ -315,35 +325,24 @@ export async function fetchPrRuns(
 ): Promise<readonly WorkflowRun[]> {
   validateRepoFormat(repo);
 
+  const branch = await fetchPrHeadBranch(repo, pr);
+
   try {
     const { stdout } = await withRetry(() =>
       execFile(
         "gh",
         [
           "api",
-          `/repos/${repo}/actions/runs?event=pull_request&per_page=100&status=completed`,
+          `/repos/${repo}/actions/runs?branch=${encodeURIComponent(branch)}&event=pull_request&per_page=100&status=completed`,
           "--paginate",
           "--jq",
-          PR_JQ_FILTER,
+          JQ_FILTER,
         ],
         { maxBuffer: 50 * 1024 * 1024 },
       ),
     );
 
-    return parseStdout(stdout)
-      .map((line) => {
-        const raw = JSON.parse(line) as RawPrRun;
-        return { raw, line };
-      })
-      .filter(({ raw }) => raw.prs.includes(pr))
-      .map(({ raw }) => ({
-        id: raw.id,
-        repo,
-        actor: raw.actor,
-        workflow: raw.workflow,
-        startedAt: raw.started,
-        updatedAt: raw.updated,
-      }));
+    return parseStdout(stdout).map(parseRunLine(repo));
   } catch (err) {
     throw new Error(`Failed to fetch PR #${pr} runs for ${repo}`, {
       cause: err,
@@ -381,14 +380,7 @@ export async function fetchRunTiming(
       WINDOWS: raw.WINDOWS / 60_000,
     };
 
-    return {
-      runId: run.id,
-      workflow: run.workflow,
-      billable,
-      durationMs:
-        (new Date(run.updatedAt).getTime() -
-          new Date(run.startedAt).getTime()),
-    };
+    return { runId: run.id, workflow: run.workflow, billable };
   } catch (err) {
     throw new Error(`Failed to fetch timing for run ${run.id} in ${repo}`, {
       cause: err,
@@ -396,11 +388,29 @@ export async function fetchRunTiming(
   }
 }
 
+export interface TimingResult {
+  readonly timings: readonly RunTiming[];
+  readonly warnings: readonly string[];
+}
+
 export async function fetchPrTimings(
   repo: string,
   runs: readonly WorkflowRun[],
-): Promise<readonly RunTiming[]> {
-  return runWithConcurrency(runs, TIMING_CONCURRENCY, (run) =>
-    fetchRunTiming(repo, run),
+): Promise<TimingResult> {
+  const timings: RunTiming[] = [];
+  const warnings: string[] = [];
+
+  const settled = await Promise.allSettled(
+    runs.map((run) => fetchRunTiming(repo, run)),
   );
+
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      timings.push(result.value);
+    } else {
+      warnings.push(causeChain(result.reason).join(": "));
+    }
+  }
+
+  return { timings, warnings };
 }

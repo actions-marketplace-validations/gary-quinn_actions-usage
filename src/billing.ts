@@ -1,9 +1,11 @@
-import type { WorkflowRun } from "./types.js";
-
 export const RUNNER_OS_KEYS = ["UBUNTU", "MACOS", "WINDOWS"] as const;
 export type RunnerOs = (typeof RUNNER_OS_KEYS)[number];
 
-/** GitHub Actions per-minute rates (USD) for private repos. */
+/**
+ * GitHub Actions per-minute rates (USD) for private repos on standard runners.
+ * Source: https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions
+ * As of 2025-04. Larger runners (4x/8x/GPU) have different rates not covered here.
+ */
 export const GITHUB_RATES: Readonly<Record<RunnerOs, number>> = {
   UBUNTU: 0.008,
   MACOS: 0.08,
@@ -14,7 +16,6 @@ export interface RunTiming {
   readonly runId: number;
   readonly workflow: string;
   readonly billable: Readonly<Record<RunnerOs, number>>; // minutes
-  readonly durationMs: number;
 }
 
 export interface WorkflowCost {
@@ -47,7 +48,6 @@ export function calculateRunCost(billable: Readonly<Record<RunnerOs, number>>): 
 
 export function aggregatePrCost(
   timings: readonly RunTiming[],
-  runs: readonly WorkflowRun[],
   pr: number,
   repo: string,
 ): PrCostSummary {
