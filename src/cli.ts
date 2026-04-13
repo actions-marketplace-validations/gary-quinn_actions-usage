@@ -10,7 +10,7 @@ import {
 } from "./github.js";
 import type { FetchResult } from "./github.js";
 import { resolveRepos, formatResolveLog } from "./resolve.js";
-import { aggregate } from "./aggregate.js";
+import { aggregate, groupByActor } from "./aggregate.js";
 import { renderTable, renderCsv, renderJson, renderMarkdown, formatRepoDisplay, formatFetchSummary } from "./output.js";
 import type { CliOptions } from "./types.js";
 
@@ -62,6 +62,10 @@ const program = new Command()
     "target repositories (default: detect from git remote)",
   )
   .option(
+    "--exclude <repos...>",
+    "exclude specific repos when scanning an org",
+  )
+  .option(
     "--since <date>",
     "start date YYYY-MM-DD (default: start of current month)",
   )
@@ -76,6 +80,12 @@ const program = new Command()
       .choices(["minutes", "runs", "name"])
       .default("minutes"),
   )
+  .addOption(
+    new Option("--group-by <field>", "group results by field")
+      .choices(["actor"])
+  )
+  .option("--include-forks", "include forked repos when scanning an org")
+  .option("--include-archived", "include archived repos when scanning an org")
   .option("--csv <path>", "export CSV to file")
   .option("--markdown-file <path>", "export markdown to file (in addition to primary format)")
   .action(async (opts) => {
@@ -83,17 +93,25 @@ const program = new Command()
       const options: CliOptions = {
         repos: opts.repo ?? [],
         org: opts.org,
+        exclude: opts.exclude,
+        groupBy: opts.groupBy,
         since: opts.since ?? startOfMonthStr(),
         until: opts.until ?? todayStr(),
         format: opts.format ?? "table",
         sort: opts.sort ?? "minutes",
         csv: opts.csv,
         markdownFile: opts.markdownFile,
+        includeForks: opts.includeForks,
+        includeArchived: opts.includeArchived,
       };
 
       await checkGhCli();
 
-      const resolved = await resolveRepos(options.org, options.repos);
+      const resolved = await resolveRepos(options.org, options.repos, {
+        exclude: options.exclude,
+        includeForks: options.includeForks,
+        includeArchived: options.includeArchived,
+      });
       const resolveLog = formatResolveLog(resolved, options.org);
       if (resolveLog) process.stderr.write(resolveLog + "\n");
       options.repos = resolved.repos;
@@ -114,13 +132,17 @@ const program = new Command()
 
       process.stderr.write(`\nTotal: ${runs.length} completed runs\n\n`);
 
-      const data = aggregate(
+      let data = aggregate(
         runs,
         options.repos,
         options.since,
         options.until,
         options.sort,
       );
+
+      if (options.groupBy === "actor") {
+        data = groupByActor(data);
+      }
 
       if (options.csv) {
         renderCsv(data, options.csv);

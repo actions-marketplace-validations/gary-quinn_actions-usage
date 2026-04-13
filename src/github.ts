@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { WorkflowRun } from "./types.js";
+import type { WorkflowRun, OrgFilterOptions } from "./types.js";
 
 const execFile = promisify(execFileCb);
 
@@ -65,7 +65,17 @@ export async function checkGhCli(): Promise<void> {
   }
 }
 
-export async function fetchOrgRepos(org: string): Promise<readonly string[]> {
+function buildOrgJqFilter(options: OrgFilterOptions = {}): string {
+  const conditions = [".disabled == false"];
+  if (!options.includeArchived) conditions.push(".archived == false");
+  if (!options.includeForks) conditions.push(".fork == false");
+  return `.[] | select(${conditions.join(" and ")}) | .full_name`;
+}
+
+export async function fetchOrgRepos(
+  org: string,
+  options: OrgFilterOptions = {},
+): Promise<readonly string[]> {
   validateOrgName(org);
 
   let stdout: string;
@@ -77,7 +87,7 @@ export async function fetchOrgRepos(org: string): Promise<readonly string[]> {
         `/orgs/${org}/repos?per_page=100`,
         "--paginate",
         "--jq",
-        ".[] | select(.archived == false and .disabled == false and .fork == false) | .full_name",
+        buildOrgJqFilter(options),
       ],
       { maxBuffer: 50 * 1024 * 1024 },
     ));
@@ -120,22 +130,60 @@ const parseRunLine =
     };
   };
 
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 1000;
+
+function isRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("rate limit") || msg.includes("429") || msg.includes("secondary rate limit");
+}
+
+/**
+ * Retry a function on rate limit errors with exponential backoff.
+ * @param fn - async function to execute
+ * @param retries - number of retry attempts (not counting the initial call)
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries: number = MAX_RETRIES,
+): Promise<T> {
+  let lastError: unknown;
+  const totalAttempts = retries + 1;
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < totalAttempts && isRateLimitError(err)) {
+        const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+        process.stderr.write(`  Rate limited, retrying in ${delay}ms (attempt ${attempt}/${retries})...\n`);
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function fetchRunsForPeriod(
   repo: string,
   start: string,
   end: string,
 ): Promise<readonly WorkflowRun[]> {
   try {
-    const { stdout } = await execFile(
-      "gh",
-      [
-        "api",
-        `/repos/${repo}/actions/runs?created=${start}..${end}&per_page=100&status=completed`,
-        "--paginate",
-        "--jq",
-        JQ_FILTER,
-      ],
-      { maxBuffer: 50 * 1024 * 1024 },
+    const { stdout } = await withRetry(() =>
+      execFile(
+        "gh",
+        [
+          "api",
+          `/repos/${repo}/actions/runs?created=${start}..${end}&per_page=100&status=completed`,
+          "--paginate",
+          "--jq",
+          JQ_FILTER,
+        ],
+        { maxBuffer: 50 * 1024 * 1024 },
+      ),
     );
 
     return parseStdout(stdout).map(parseRunLine(repo));
@@ -209,7 +257,7 @@ export async function fetchRepoRuns(
 // Safe because Node.js is single-threaded: nextIndex++ and the while check
 // run synchronously between await points, so no two workers ever claim the
 // same index. Each worker yields only at `await fn(...)`.
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
