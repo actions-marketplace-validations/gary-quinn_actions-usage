@@ -397,13 +397,20 @@ export async function fetchPrTimings(
   repo: string,
   runs: readonly WorkflowRun[],
 ): Promise<TimingResult> {
-  const timings: RunTiming[] = [];
-  const warnings: string[] = [];
-
-  const settled = await Promise.allSettled(
-    runs.map((run) => fetchRunTiming(repo, run)),
+  const settled = await runWithConcurrency(
+    runs,
+    TIMING_CONCURRENCY,
+    async (run): Promise<PromiseSettledResult<RunTiming>> => {
+      try {
+        return { status: "fulfilled", value: await fetchRunTiming(repo, run) };
+      } catch (reason) {
+        return { status: "rejected", reason };
+      }
+    },
   );
 
+  const timings: RunTiming[] = [];
+  const warnings: string[] = [];
   for (const result of settled) {
     if (result.status === "fulfilled") {
       timings.push(result.value);
