@@ -457,9 +457,10 @@ export async function fetchRunJobsDuration(
 }
 
 /**
- * Returns true when timings exist but every run reports zero billable time
- * across all OS types — indicating the org's plan includes minutes and the
- * billing API won't return useful data.
+ * Returns true when at least one run has non-zero billable minutes,
+ * meaning the billing API returned useful data. Returns false when
+ * timings are empty or every run reports zero — indicating the org's
+ * plan includes minutes and a fallback is needed.
  */
 export function hasBillableData(timings: readonly RunTiming[]): boolean {
   if (timings.length === 0) return false;

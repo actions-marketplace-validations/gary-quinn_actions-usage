@@ -76,7 +76,10 @@ async function runPrCost(options: CliOptions): Promise<void> {
   }
 
   if (timings.length === 0) {
-    process.stderr.write("Could not fetch billing data for any run.\n");
+    const detail = estimated
+      ? "Billing API returned 0 minutes and job duration fallback also failed."
+      : "Could not fetch billing data for any run.";
+    process.stderr.write(`${detail}\n`);
     process.exit(EXIT_NO_DATA);
   }
 

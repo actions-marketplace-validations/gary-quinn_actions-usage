@@ -6673,7 +6673,9 @@ async function runPrCost(options) {
 `);
   }
   if (timings.length === 0) {
-    process.stderr.write("Could not fetch billing data for any run.\n");
+    const detail = estimated ? "Billing API returned 0 minutes and job duration fallback also failed." : "Could not fetch billing data for any run.";
+    process.stderr.write(`${detail}
+`);
     process.exit(EXIT_NO_DATA);
   }
   const summary = aggregatePrCost(timings, pr, repo, estimated);
