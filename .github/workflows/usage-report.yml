@@ -6,14 +6,6 @@ on:
   pull_request:
     types: [opened, synchronize]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Output mode'
-        type: choice
-        options:
-          - issue
-          - both
-        default: 'issue'
 
 jobs:
   pr-comment:
@@ -38,5 +30,5 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./
         with:
-          mode: ${{ github.event.inputs.mode || 'issue' }}
+          mode: issue
           issue-title: 'Weekly Actions Usage Report'
