@@ -47,7 +47,7 @@ runs:
   using: 'composite'
   steps:
     - name: Setup Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
       with:
         node-version: '20'
 
@@ -176,7 +176,7 @@ runs:
       if: >-
         (inputs.mode == 'pr-comment' || inputs.mode == 'both')
         && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         MARKDOWN_BODY: ${{ steps.markdown.outputs.body }}
       with:
@@ -212,7 +212,7 @@ runs:
       if: >-
         (inputs.mode == 'issue' || inputs.mode == 'both')
         && github.event_name != 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         MARKDOWN_BODY: ${{ steps.markdown.outputs.body }}
         ISSUE_TITLE: ${{ inputs.issue-title }}
