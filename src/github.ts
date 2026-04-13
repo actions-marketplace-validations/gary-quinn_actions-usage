@@ -209,7 +209,7 @@ export async function fetchRepoRuns(
 // Safe because Node.js is single-threaded: nextIndex++ and the while check
 // run synchronously between await points, so no two workers ever claim the
 // same index. Each worker yields only at `await fn(...)`.
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,

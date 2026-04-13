@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   getMonthPeriods,
   validateRepoFormat,
+  runWithConcurrency,
 } from "./github.js";
 
 describe("getMonthPeriods", () => {
@@ -58,5 +59,48 @@ describe("validateRepoFormat", () => {
   it("rejects names starting with special characters", () => {
     expect(() => validateRepoFormat(".hidden/repo")).toThrow(/Invalid repo format/);
     expect(() => validateRepoFormat("org/.hidden")).toThrow(/Invalid repo format/);
+  });
+});
+
+describe("runWithConcurrency", () => {
+  it("returns results in input order", async () => {
+    const items = [1, 2, 3, 4, 5];
+    const results = await runWithConcurrency(items, 2, async (x) => x * 10);
+    expect(results).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it("respects concurrency limit", async () => {
+    let active = 0;
+    let maxActive = 0;
+
+    const results = await runWithConcurrency([1, 2, 3, 4, 5], 2, async (x) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      return x;
+    });
+
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(results).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("propagates errors", async () => {
+    await expect(
+      runWithConcurrency([1, 2, 3], 2, async (x) => {
+        if (x === 2) throw new Error("boom");
+        return x;
+      }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("returns empty array for empty input", async () => {
+    const results = await runWithConcurrency([], 5, async (x) => x);
+    expect(results).toEqual([]);
+  });
+
+  it("handles concurrency larger than items", async () => {
+    const results = await runWithConcurrency([1, 2], 10, async (x) => x * 2);
+    expect(results).toEqual([2, 4]);
   });
 });
