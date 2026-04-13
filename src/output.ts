@@ -310,5 +310,5 @@ export function renderJson(data: AggregatedData): void {
     })),
   };
 
-  console.log(JSON.stringify(output, null, 2));
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
 }
