@@ -11,13 +11,9 @@ on:
         description: 'Output mode'
         type: choice
         options:
-          - pr-comment
           - issue
           - both
         default: 'issue'
-
-permissions:
-  contents: read
 
 jobs:
   pr-comment:

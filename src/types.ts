@@ -41,7 +41,7 @@ export interface CliOptions {
   org?: string;
   since: string;
   until: string;
-  format: "table" | "csv" | "json";
+  format: "table" | "csv" | "json" | "markdown";
   sort: SortField;
   csv?: string;
 }

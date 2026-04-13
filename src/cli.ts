@@ -11,7 +11,7 @@ import {
 import type { FetchResult } from "./github.js";
 import { resolveRepos, formatResolveLog } from "./resolve.js";
 import { aggregate } from "./aggregate.js";
-import { renderTable, renderCsv, renderJson, formatRepoDisplay, formatFetchSummary } from "./output.js";
+import { renderTable, renderCsv, renderJson, renderMarkdown, formatRepoDisplay, formatFetchSummary } from "./output.js";
 import type { CliOptions } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -68,7 +68,7 @@ const program = new Command()
   .option("--until <date>", "end date YYYY-MM-DD (default: today)")
   .addOption(
     new Option("--format <type>", "output format")
-      .choices(["table", "csv", "json"])
+      .choices(["table", "csv", "json", "markdown"])
       .default("table"),
   )
   .addOption(
@@ -130,6 +130,9 @@ const program = new Command()
           break;
         case "json":
           renderJson(data);
+          break;
+        case "markdown":
+          renderMarkdown(data);
           break;
         default:
           renderTable(data);

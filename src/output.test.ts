@@ -8,6 +8,7 @@ import {
   renderTable,
   renderCsv,
   renderJson,
+  renderMarkdown,
 } from "./output.js";
 import type { AggregatedData } from "./types.js";
 import type { FetchResult } from "./github.js";
@@ -349,6 +350,44 @@ describe("renderCsv", () => {
     writeSpy.mockRestore();
 
     expect(output).toContain('"alice, the dev"');
+  });
+});
+
+describe("renderMarkdown", () => {
+  it("outputs markdown table for single repo", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    renderMarkdown(makeSampleData());
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
+    logSpy.mockRestore();
+
+    expect(output).toContain("## GitHub Actions Usage Report");
+    expect(output).toContain("**org/repo**");
+    expect(output).toContain("| Developer | Minutes | Hours | Runs |");
+    expect(output).toContain("| alice |");
+    expect(output).toContain("| **TOTAL** |");
+    expect(output).not.toContain("| Repo |");
+  });
+
+  it("includes Repo column for multi-repo", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    renderMarkdown(makeSampleData(true));
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
+    logSpy.mockRestore();
+
+    expect(output).toContain("**2 repositories**");
+    expect(output).toContain("| Developer | Repo | Minutes |");
+    expect(output).toContain("| alice | api |");
+  });
+
+  it("includes workflows in details section", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    renderMarkdown(makeSampleData());
+    const output = logSpy.mock.calls.map(([c]) => c).join("");
+    logSpy.mockRestore();
+
+    expect(output).toContain("<details>");
+    expect(output).toContain("Top workflows");
+    expect(output).toContain("| CI |");
   });
 });
 

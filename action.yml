@@ -36,6 +36,9 @@ outputs:
   json:
     description: 'JSON output of the report'
     value: ${{ steps.report.outputs.json }}
+  markdown:
+    description: 'Markdown output of the report'
+    value: ${{ steps.report.outputs.markdown }}
   issue-url:
     description: 'URL of created issue (if mode includes issue)'
     value: ${{ steps.issue.outputs.url }}
@@ -51,6 +54,27 @@ runs:
       with:
         node-version: '20'
 
+    - name: Build from source
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --ignore-scripts && npm run build
+
+    - name: Validate mode
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        case "$INPUT_MODE" in
+          pr-comment|issue|both) ;;
+          *) echo "::error::Invalid mode: $INPUT_MODE (must be pr-comment, issue, or both)"; exit 1 ;;
+        esac
+
+        if [[ "$INPUT_MODE" == "pr-comment" && "$EVENT_NAME" != "pull_request" ]]; then
+          echo "::error::mode 'pr-comment' requires pull_request event (got $EVENT_NAME)"
+          exit 1
+        fi
+
     - name: Run actions-usage
       id: report
       shell: bash
@@ -62,8 +86,9 @@ runs:
         INPUT_UNTIL: ${{ inputs.until }}
         INPUT_SORT: ${{ inputs.sort }}
         INPUT_REPO_FALLBACK: ${{ github.repository }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        ARGS=("--format" "json" "--sort" "$INPUT_SORT")
+        ARGS=("--sort" "$INPUT_SORT")
 
         if [ -n "$INPUT_ORG" ]; then
           ARGS+=("--org" "$INPUT_ORG")
@@ -82,94 +107,24 @@ runs:
           ARGS+=("--repo" "$INPUT_REPO_FALLBACK")
         fi
 
-        JSON=$(npx actions-usage@latest "${ARGS[@]}" 2>/dev/null)
-
-        # Write JSON to output (use temp file to avoid heredoc issues)
-        TMPFILE=$(mktemp)
-        echo "$JSON" > "$TMPFILE"
-        echo "json<<ACTIONS_USAGE_EOF" >> "$GITHUB_OUTPUT"
-        cat "$TMPFILE" >> "$GITHUB_OUTPUT"
-        echo "ACTIONS_USAGE_EOF" >> "$GITHUB_OUTPUT"
-        rm -f "$TMPFILE"
-
-    - name: Build markdown report
-      id: markdown
-      shell: bash
-      env:
-        REPORT_JSON: ${{ steps.report.outputs.json }}
-      run: |
-        if [ -z "$REPORT_JSON" ] || [ "$REPORT_JSON" = "null" ]; then
-          echo "body=No completed workflow runs found in this period." >> "$GITHUB_OUTPUT"
-          exit 0
+        # Capture JSON output
+        if ! JSON=$(node "$ACTION_PATH/dist/cli.js" --format json "${ARGS[@]}" 2>"$RUNNER_TEMP/actions-usage-stderr.log"); then
+          echo "::warning::actions-usage failed — see stderr below"
+          cat "$RUNNER_TEMP/actions-usage-stderr.log" >&2
+          exit 1
         fi
 
-        TMPFILE=$(mktemp)
-
-        # Header
-        PERIOD_SINCE=$(echo "$REPORT_JSON" | jq -r '.period.since')
-        PERIOD_UNTIL=$(echo "$REPORT_JSON" | jq -r '.period.until')
-        REPOS=$(echo "$REPORT_JSON" | jq -r '.repos | length')
-        MULTI_REPO=$([ "$REPOS" -gt 1 ] && echo "true" || echo "false")
+        # Capture Markdown output
+        MARKDOWN=$(node "$ACTION_PATH/dist/cli.js" --format markdown "${ARGS[@]}" 2>/dev/null)
 
         {
-          echo "## GitHub Actions Usage Report"
-          echo ""
-          if [ "$MULTI_REPO" = "true" ]; then
-            echo "**${REPOS} repositories** | ${PERIOD_SINCE} to ${PERIOD_UNTIL}"
-          else
-            REPO_NAME=$(echo "$REPORT_JSON" | jq -r '.repos[0]')
-            echo "**${REPO_NAME}** | ${PERIOD_SINCE} to ${PERIOD_UNTIL}"
-          fi
-          echo ""
-
-          # Table header
-          if [ "$MULTI_REPO" = "true" ]; then
-            echo "| Developer | Repo | Minutes | Hours | Runs |"
-            echo "|-----------|------|--------:|------:|-----:|"
-          else
-            echo "| Developer | Minutes | Hours | Runs |"
-            echo "|-----------|--------:|------:|-----:|"
-          fi
-
-          # User rows
-          echo "$REPORT_JSON" | jq -r --arg multi "$MULTI_REPO" '
-            .users[] |
-            if $multi == "true" then
-              "| \(.developer) | \(.repo | split("/") | .[-1]) | \(.totalMinutes | tostring) | \(.hours | tostring) | \(.runs | tostring) |"
-            else
-              "| \(.developer) | \(.totalMinutes | tostring) | \(.hours | tostring) | \(.runs | tostring) |"
-            end
-          '
-
-          # Totals row
-          echo "$REPORT_JSON" | jq -r --arg multi "$MULTI_REPO" '
-            .totals |
-            if $multi == "true" then
-              "| **TOTAL** | | **\(.minutes | tostring)** | **\(.hours | tostring)** | **\(.runs | tostring)** |"
-            else
-              "| **TOTAL** | **\(.minutes | tostring)** | **\(.hours | tostring)** | **\(.runs | tostring)** |"
-            end
-          '
-
-          # Top workflows
-          WORKFLOW_COUNT=$(echo "$REPORT_JSON" | jq '.workflows | length')
-          if [ "$WORKFLOW_COUNT" -gt 0 ]; then
-            echo ""
-            echo "<details>"
-            echo "<summary>Top workflows</summary>"
-            echo ""
-            echo "| Workflow | Minutes | Runs |"
-            echo "|----------|--------:|-----:|"
-            echo "$REPORT_JSON" | jq -r '.workflows[] | "| \(.name) | \(.minutes | tostring) | \(.runs | tostring) |"'
-            echo ""
-            echo "</details>"
-          fi
-        } > "$TMPFILE"
-
-        echo "body<<ACTIONS_USAGE_EOF" >> "$GITHUB_OUTPUT"
-        cat "$TMPFILE" >> "$GITHUB_OUTPUT"
-        echo "ACTIONS_USAGE_EOF" >> "$GITHUB_OUTPUT"
-        rm -f "$TMPFILE"
+          echo "json<<ACTIONS_USAGE_EOF"
+          echo "$JSON"
+          echo "ACTIONS_USAGE_EOF"
+          echo "markdown<<ACTIONS_USAGE_MD_EOF"
+          echo "$MARKDOWN"
+          echo "ACTIONS_USAGE_MD_EOF"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Post PR comment
       id: comment
@@ -178,7 +133,7 @@ runs:
         && github.event_name == 'pull_request'
       uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
-        MARKDOWN_BODY: ${{ steps.markdown.outputs.body }}
+        MARKDOWN_BODY: ${{ steps.report.outputs.markdown }}
       with:
         script: |
           const marker = '<!-- actions-usage-report -->';
@@ -186,7 +141,6 @@ runs:
           const { owner, repo } = context.repo;
           const issue_number = context.payload.pull_request.number;
 
-          // Find existing comment
           const comments = await github.rest.issues.listComments({
             owner, repo, issue_number,
           });
@@ -207,29 +161,53 @@ runs:
 
           core.setOutput('url', url);
 
-    - name: Create issue
+    - name: Create or update issue
       id: issue
       if: >-
         (inputs.mode == 'issue' || inputs.mode == 'both')
         && github.event_name != 'pull_request'
       uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
-        MARKDOWN_BODY: ${{ steps.markdown.outputs.body }}
+        MARKDOWN_BODY: ${{ steps.report.outputs.markdown }}
         ISSUE_TITLE: ${{ inputs.issue-title }}
         ISSUE_LABELS: ${{ inputs.issue-labels }}
       with:
         script: |
           const { owner, repo } = context.repo;
+          const title = process.env.ISSUE_TITLE;
           const labels = process.env.ISSUE_LABELS
             .split(',')
             .map(l => l.trim())
             .filter(Boolean);
+          const marker = '<!-- actions-usage-report -->';
+          const body = `${marker}\n${process.env.MARKDOWN_BODY}`;
 
-          const created = await github.rest.issues.create({
+          // Find existing open issue with same title
+          const { data: issues } = await github.rest.issues.listForRepo({
             owner, repo,
-            title: process.env.ISSUE_TITLE,
-            body: process.env.MARKDOWN_BODY,
-            labels,
+            state: 'open',
+            labels: labels.join(','),
+            per_page: 10,
           });
+          const existing = issues.find(i =>
+            i.title === title && i.body?.startsWith(marker)
+          );
 
-          core.setOutput('url', created.data.html_url);
+          let url;
+          if (existing) {
+            const updated = await github.rest.issues.update({
+              owner, repo,
+              issue_number: existing.number,
+              body,
+            });
+            url = updated.data.html_url;
+            core.info(`Updated existing issue #${existing.number}`);
+          } else {
+            const created = await github.rest.issues.create({
+              owner, repo, title, body, labels,
+            });
+            url = created.data.html_url;
+            core.info(`Created issue #${created.data.number}`);
+          }
+
+          core.setOutput('url', url);
