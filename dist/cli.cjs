@@ -5381,7 +5381,6 @@ async function fetchMultiRepoRuns(repos, since, until) {
     (repo) => fetchRepoRuns(repo, since, until)
   );
 }
-var TIMING_CONCURRENCY = 10;
 async function fetchPrHeadBranch(repo, pr) {
   try {
     const { stdout } = await withRetry(
@@ -5520,7 +5519,7 @@ async function fetchPrTimings(repo, runs) {
   const fallbackTimings = [];
   const jobResults = await runWithConcurrency(
     timings,
-    TIMING_CONCURRENCY,
+    10,
     async (t) => {
       try {
         const billable = await fetchRunJobsDuration(repo, t.runId);
