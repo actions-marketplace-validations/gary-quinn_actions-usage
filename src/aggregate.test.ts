@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getMonthKey, getDurationMinutes, aggregate, compareUsers, computeTotals, groupByActor } from "./aggregate.js";
+import { getMonthKey, getDurationMinutes, aggregate, compareUsers, computeTotals, groupByActor, GROUPED_REPO } from "./aggregate.js";
 import type { WorkflowRun, UserStats, AggregatedData } from "./types.js";
 
 describe("getMonthKey", () => {
@@ -240,7 +240,7 @@ describe("groupByActor", () => {
     const alice = result.users.find((u) => u.actor === "alice")!;
     expect(alice.totalMinutes).toBe(100);
     expect(alice.totalRuns).toBe(8);
-    expect(alice.repo).toBe("*");
+    expect(alice.repo).toBe(GROUPED_REPO);
   });
 
   it("merges monthly minutes", () => {

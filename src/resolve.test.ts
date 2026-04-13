@@ -124,6 +124,12 @@ describe("resolveRepos", () => {
       /None of the specified repos found/,
     );
   });
+
+  it("handles duplicate exclude entries (full + short name for same repo)", async () => {
+    mockFetchOrgRepos.mockResolvedValue(["org/api", "org/web"]);
+    const result = await resolveRepos("org", [], { exclude: ["org/api", "api"] });
+    expect(result.repos).toEqual(["org/web"]);
+  });
 });
 
 describe("formatResolveLog", () => {

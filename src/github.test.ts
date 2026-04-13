@@ -152,6 +152,7 @@ describe("withRetry", () => {
         throw new Error("429 rate limit");
       }, 2),
     ).rejects.toThrow("429 rate limit");
+    // retries=2 → 1 initial + 2 retries = 3 total attempts
     expect(attempts).toBe(3);
     stderrSpy.mockRestore();
   });

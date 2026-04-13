@@ -210,6 +210,8 @@ export function renderMarkdown(data: AggregatedData, filePath?: string): void {
 
   lines.push("## GitHub Actions Usage Report");
   lines.push("");
+  // Intentionally checks repo count, not shouldShowRepo() — the header
+  // should say "N repositories" even when grouped (repo column is hidden).
   lines.push(
     repos.length > 1
       ? `**${repos.length} repositories** | ${data.since} to ${data.until}`

@@ -1,5 +1,8 @@
 import type { WorkflowRun, UserStats, AggregatedData, SortField } from "./types.js";
 
+/** Sentinel value for UserStats.repo when rows are grouped by actor. */
+export const GROUPED_REPO = "*";
+
 export function getMonthKey(dateStr: string): string {
   const date = new Date(dateStr);
   const year = date.getUTCFullYear();
@@ -169,7 +172,7 @@ export function groupByActor(data: AggregatedData): AggregatedData {
 
   const users: UserStats[] = [...grouped.entries()].map(([actor, stats]) => ({
     actor,
-    repo: "*",
+    repo: GROUPED_REPO,
     totalMinutes: stats.totalMinutes,
     totalRuns: stats.totalRuns,
     monthlyMinutes: stats.monthlyMinutes,
