@@ -410,12 +410,12 @@ describe("renderMarkdown", () => {
 
 describe("renderJson", () => {
   it("outputs valid JSON with correct structure", () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     renderJson(makeSampleData());
 
-    const output = logSpy.mock.calls.map(([c]) => c).join("");
-    logSpy.mockRestore();
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
 
     const parsed = JSON.parse(output);
     expect(parsed.repos).toEqual(["org/repo"]);
@@ -430,24 +430,24 @@ describe("renderJson", () => {
   });
 
   it("uses YYYY-MM keys in monthly breakdown", () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     renderJson(makeSampleData());
 
-    const output = logSpy.mock.calls.map(([c]) => c).join("");
-    logSpy.mockRestore();
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
 
     const parsed = JSON.parse(output);
     expect(Object.keys(parsed.users[0].monthly)).toEqual(["2025-01", "2025-02"]);
   });
 
   it("includes repo per user in multi-repo JSON", () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     renderJson(makeSampleData(true));
 
-    const output = logSpy.mock.calls.map(([c]) => c).join("");
-    logSpy.mockRestore();
+    const output = writeSpy.mock.calls.map(([c]) => c).join("");
+    writeSpy.mockRestore();
 
     const parsed = JSON.parse(output);
     expect(parsed.repos).toEqual(["org/api", "org/web"]);
