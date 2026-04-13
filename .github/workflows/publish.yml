@@ -36,6 +36,8 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           VERSION="${RELEASE_TAG#v}"
+          # npm version does not support +build metadata, so strip it before validation
+          VERSION="${VERSION%%+*}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
             echo "::error::Invalid semver: $VERSION (from tag $RELEASE_TAG)"
             exit 1
@@ -55,14 +57,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
       - name: Update major version tag
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+          # Semver: major.minor.patch with optional pre-release and build metadata
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
             echo "::error::Invalid semver: $VERSION (from tag $RELEASE_TAG)"
             exit 1
           fi
@@ -74,9 +76,46 @@ jobs:
           fi
 
           MAJOR="v${VERSION%%.*}"
+
+          # Guard: don't regress the major tag to an older version
+          EXISTING_SHA=$(gh api "repos/${{ github.repository }}/git/ref/tags/$MAJOR" --jq '.object.sha' 2>/dev/null || echo "")
+          if [ -n "$EXISTING_SHA" ]; then
+            # Find which semver tag points to this SHA
+            EXISTING_TAG=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/v" \
+              --jq ".[] | select(.object.sha == \"$EXISTING_SHA\") | .ref" 2>/dev/null \
+              | sed 's|refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+
+            if [ -n "$EXISTING_TAG" ]; then
+              EXISTING_VER="${EXISTING_TAG#v}"
+              NEW_MAJOR="${VERSION%%.*}"
+              NEW_MINOR="${VERSION#*.}"; NEW_MINOR="${NEW_MINOR%%.*}"
+              NEW_PATCH="${VERSION##*.}"
+              OLD_MAJOR="${EXISTING_VER%%.*}"
+              OLD_MINOR="${EXISTING_VER#*.}"; OLD_MINOR="${OLD_MINOR%%.*}"
+              OLD_PATCH="${EXISTING_VER##*.}"
+
+              if [ "$NEW_MAJOR" -lt "$OLD_MAJOR" ] 2>/dev/null ||
+                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -lt "$OLD_MINOR" ]) 2>/dev/null ||
+                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -eq "$OLD_MINOR" ] && [ "$NEW_PATCH" -lt "$OLD_PATCH" ]) 2>/dev/null; then
+                echo "::error::Refusing to regress $MAJOR from $EXISTING_TAG to $RELEASE_TAG"
+                exit 1
+              fi
+              echo "$MAJOR currently points to $EXISTING_TAG ($EXISTING_SHA)"
+            else
+              echo "$MAJOR exists ($EXISTING_SHA) but could not resolve to a semver tag — proceeding"
+            fi
+          fi
+
           echo "Updating $MAJOR tag to point to $RELEASE_TAG"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa "$MAJOR" -m "Release $RELEASE_TAG"
-          git push origin "$MAJOR" --force
+          # Use GitHub API to update tag ref — no checkout/push needed
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          if [ -z "$EXISTING_SHA" ]; then
+            gh api "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/tags/$MAJOR" -f sha="$TAG_SHA"
+            echo "Created $MAJOR pointing to $TAG_SHA"
+          else
+            gh api "repos/${{ github.repository }}/git/refs/tags/$MAJOR" \
+              -X PATCH -f sha="$TAG_SHA" -F force=true
+            echo "Updated $MAJOR to $TAG_SHA"
+          fi
