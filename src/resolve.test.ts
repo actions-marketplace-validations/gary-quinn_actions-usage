@@ -89,6 +89,15 @@ describe("resolveRepos", () => {
       /None of the specified repos found/,
     );
   });
+
+  it("passes org filter options to fetchOrgRepos", async () => {
+    mockFetchOrgRepos.mockResolvedValue(["org/api"]);
+    await resolveRepos("org", [], { includeForks: true, includeArchived: true });
+    expect(mockFetchOrgRepos).toHaveBeenCalledWith("org", {
+      includeForks: true,
+      includeArchived: true,
+    });
+  });
 });
 
 describe("formatResolveLog", () => {

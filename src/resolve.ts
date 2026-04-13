@@ -3,11 +3,17 @@ import {
   detectRepo,
   validateRepoFormat,
 } from "./github.js";
+import type { OrgFilterOptions } from "./types.js";
 
 export interface ResolveResult {
   readonly repos: readonly string[];
   readonly source: "org" | "org-filtered" | "explicit" | "detected";
   readonly orgTotal?: number;
+}
+
+export interface ResolveOptions {
+  readonly includeForks?: boolean;
+  readonly includeArchived?: boolean;
 }
 
 function looksLikeFullName(repo: string): boolean {
@@ -17,9 +23,15 @@ function looksLikeFullName(repo: string): boolean {
 export async function resolveRepos(
   org: string | undefined,
   repos: readonly string[],
+  options: ResolveOptions = {},
 ): Promise<ResolveResult> {
+  const orgFilter: OrgFilterOptions = {
+    includeForks: options.includeForks,
+    includeArchived: options.includeArchived,
+  };
+
   if (org) {
-    const orgRepos = await fetchOrgRepos(org);
+    const orgRepos = await fetchOrgRepos(org, orgFilter);
 
     if (repos.length === 0) {
       return { repos: orgRepos, source: "org", orgTotal: orgRepos.length };

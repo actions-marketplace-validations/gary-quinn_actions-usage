@@ -36,6 +36,11 @@ export interface AggregatedData {
 
 export type SortField = "minutes" | "runs" | "name";
 
+export interface OrgFilterOptions {
+  readonly includeForks?: boolean;
+  readonly includeArchived?: boolean;
+}
+
 export interface CliOptions {
   repos: readonly string[];
   org?: string;
@@ -45,4 +50,6 @@ export interface CliOptions {
   sort: SortField;
   csv?: string;
   markdownFile?: string;
+  includeForks?: boolean;
+  includeArchived?: boolean;
 }

@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { WorkflowRun } from "./types.js";
+import type { WorkflowRun, OrgFilterOptions } from "./types.js";
 
 const execFile = promisify(execFileCb);
 
@@ -65,7 +65,17 @@ export async function checkGhCli(): Promise<void> {
   }
 }
 
-export async function fetchOrgRepos(org: string): Promise<readonly string[]> {
+function buildOrgJqFilter(options: OrgFilterOptions = {}): string {
+  const conditions = [".disabled == false"];
+  if (!options.includeArchived) conditions.push(".archived == false");
+  if (!options.includeForks) conditions.push(".fork == false");
+  return `.[] | select(${conditions.join(" and ")}) | .full_name`;
+}
+
+export async function fetchOrgRepos(
+  org: string,
+  options: OrgFilterOptions = {},
+): Promise<readonly string[]> {
   validateOrgName(org);
 
   let stdout: string;
@@ -77,7 +87,7 @@ export async function fetchOrgRepos(org: string): Promise<readonly string[]> {
         `/orgs/${org}/repos?per_page=100`,
         "--paginate",
         "--jq",
-        ".[] | select(.archived == false and .disabled == false and .fork == false) | .full_name",
+        buildOrgJqFilter(options),
       ],
       { maxBuffer: 50 * 1024 * 1024 },
     ));

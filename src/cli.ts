@@ -76,6 +76,8 @@ const program = new Command()
       .choices(["minutes", "runs", "name"])
       .default("minutes"),
   )
+  .option("--include-forks", "include forked repos when scanning an org")
+  .option("--include-archived", "include archived repos when scanning an org")
   .option("--csv <path>", "export CSV to file")
   .option("--markdown-file <path>", "export markdown to file (in addition to primary format)")
   .action(async (opts) => {
@@ -89,11 +91,16 @@ const program = new Command()
         sort: opts.sort ?? "minutes",
         csv: opts.csv,
         markdownFile: opts.markdownFile,
+        includeForks: opts.includeForks,
+        includeArchived: opts.includeArchived,
       };
 
       await checkGhCli();
 
-      const resolved = await resolveRepos(options.org, options.repos);
+      const resolved = await resolveRepos(options.org, options.repos, {
+        includeForks: options.includeForks,
+        includeArchived: options.includeArchived,
+      });
       const resolveLog = formatResolveLog(resolved, options.org);
       if (resolveLog) process.stderr.write(resolveLog + "\n");
       options.repos = resolved.repos;
